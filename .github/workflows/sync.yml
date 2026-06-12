@@ -12,7 +12,7 @@ jobs:
           fetch-depth: 0
       - name: Push to Hugging Face
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_TOKEN: ${{ secrets.HF_IDE_TOKEN }}
         run: |
           git config user.email "action@github.com"
           git config user.name "GitHub Action"
