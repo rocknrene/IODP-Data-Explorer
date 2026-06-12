@@ -6,7 +6,7 @@ colorTo: green
 sdk: docker
 pinned: false
 license: mit
-short_description: Interactive visualization tool for IODP core and downhole data
+short_description: Interactive IODP data visualization tool
 ---
 
 # IODP Explorer
