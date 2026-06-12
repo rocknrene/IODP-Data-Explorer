@@ -25,7 +25,7 @@ PLOT_CFG = dict(
 CARD = dict(background=C["panel"], border=f"1px solid {C['border']}",
             borderRadius="8px", padding="14px")
 FONT = "monospace"
-DD   = {"background": C["bg"], "color": C["text"],
+DD   = {"background": C["panel"], "color": C["text"],
         "border": f"1px solid {C['border']}", "borderRadius": "4px"}
 LBL  = {"color": C["muted"], "fontSize": "10px", "letterSpacing": "2px",
         "marginBottom": "4px", "marginTop": "12px", "fontFamily": FONT}
@@ -65,7 +65,7 @@ LORE_REPORTS = {
 # PANGAEA — BCR (Bremen) / ESO/ECORD, mission-specific platform expeditions
 # Direct tabular download: https://doi.pangaea.de/10.1594/PANGAEA.{id}?format=textfile
 # Search API: https://www.pangaea.de/api/datasets/search?q=...&count=20
-PANGAEA_SEARCH  = "https://www.pangaea.de/api/datasets/search"
+PANGAEA_ES      = "https://ws.pangaea.de/es/pangaea/panmd/_search"
 PANGAEA_DOI_DL  = "https://doi.pangaea.de/10.1594/PANGAEA.{pid}?format=textfile"
 
 # J-CORES (KCC/JAMSTEC) — Chikyu expeditions (343, 405, 319, etc.)
@@ -338,19 +338,26 @@ def fetch_pangaea_doi(pangaea_id):
 
 
 def search_pangaea(query, count=10):
-    """Search PANGAEA and return a list of (title, doi_id, url) tuples."""
+    """Search PANGAEA via Elasticsearch and return list of {label, value} dicts."""
+    body = {
+        "query": {"query_string": {"query": query, "default_operator": "AND"}},
+        "size": count,
+        "_source": ["title", "URI"],
+    }
     try:
-        r = requests.get(PANGAEA_SEARCH,
-                         params={"q": query, "count": count, "format": "json"},
-                         timeout=20)
+        r = requests.post(PANGAEA_ES, json=body, timeout=20,
+                          headers={"Content-Type": "application/json"})
         r.raise_for_status()
-        data = r.json()
+        hits = r.json().get("hits", {}).get("hits", [])
         results = []
-        for item in data.get("results", []):
-            doi = item.get("doi", "")
-            pid = doi.split(".")[-1] if doi else ""
-            title = item.get("title", doi)
-            results.append({"label": f"{pid} — {title[:60]}", "value": pid})
+        for h in hits:
+            src   = h.get("_source", {})
+            uri   = src.get("URI", "")
+            # URI looks like "https://doi.pangaea.de/10.1594/PANGAEA.938129"
+            pid   = uri.split(".")[-1] if uri else h.get("_id", "")
+            title = src.get("title", uri)
+            if pid:
+                results.append({"label": f"{pid} — {str(title)[:60]}", "value": pid})
         return results, None
     except Exception as e:
         return [], str(e)
@@ -485,6 +492,33 @@ def make_chart(df, ctype, x, y, color, curves,
 # ── App ────────────────────────────────────────────────────────────────────────
 server = flask.Flask(__name__)
 app    = Dash(__name__, server=server, suppress_callback_exceptions=True)
+
+# Inject global CSS to fix Dash dropdown contrast on dark backgrounds
+app.index_string = """<!DOCTYPE html>
+<html>
+<head>
+{%metas%}
+<title>IODP Explorer</title>
+{%favicon%}
+{%css%}
+<style>
+.Select-menu-outer,.VirtualizedSelectFocusedOption,.VirtualizedSelectOption,.Select-option{background-color:#21262d!important;color:#e6edf3!important}
+.Select-option:hover,.Select-option.is-focused{background-color:#30363d!important;color:#58a6ff!important}
+.Select-value-label,.Select-placeholder,.Select--single .Select-value{color:#e6edf3!important}
+.Select-control{background-color:#21262d!important;border-color:#30363d!important;color:#e6edf3!important}
+.Select-input input{color:#e6edf3!important;background:transparent!important}
+.Select-value{background-color:#30363d!important;border-color:#58a6ff!important;color:#e6edf3!important}
+.Select-value-icon{color:#8b949e!important;border-color:#58a6ff!important}
+.Select-value-icon:hover{background-color:#58a6ff!important;color:#0d1117!important}
+.Select-arrow{border-top-color:#8b949e!important}
+.Select-clear{color:#8b949e!important}
+</style>
+</head>
+<body>
+{%app_entry%}
+<footer>{%config%}{%scripts%}{%renderer%}</footer>
+</body>
+</html>"""
 
 TAB_STYLE = {"backgroundColor":C["panel"],"color":C["muted"],
              "border":f"1px solid {C['border']}","borderBottom":"none",
@@ -680,10 +714,29 @@ post_sidebar = html.Div([
     html.Button("Merge datasets", id="pe-merge-btn", n_clicks=0,
                 style={**BTN(C["accent2"]),"marginTop":"10px","fontSize":"12px"}),
     html.Hr(style={"borderColor":C["border"],"margin":"10px 0"}),
-    html.P("X AXIS", style=LBL),
+    html.P("CHART MODE", style=LBL),
+    dcc.RadioItems(id="pe-chart-mode", value="tracks",
+        options=[
+            {"label": " Depth tracks  (each property its own lane)", "value": "tracks"},
+            {"label": " Correlation scatter  (A vs B, colour = depth)", "value": "scatter"},
+            {"label": " Dual-axis overlay  (two scales, one depth axis)", "value": "dual"},
+            {"label": " Rolling mean  (smoothed downhole trends)", "value": "rolling"},
+        ],
+        labelStyle={"display":"block","marginBottom":"6px",
+                    "color":C["text"],"fontSize":"11px","fontFamily":FONT},
+        inputStyle={"marginRight":"6px","accentColor":C["accent2"]},
+    ),
+    html.P("DEPTH COLUMN", style=LBL),
     dcc.Dropdown(id="pe-xaxis", options=[], value=None, style=DD),
-    html.P("Y AXIS", style=LBL),
+    html.P("DATASET A  columns", style=LBL),
     dcc.Dropdown(id="pe-yaxis", options=[], value=None, multi=True, style=DD),
+    html.P("DATASET B  columns", style=LBL),
+    dcc.Dropdown(id="pe-ycols-b", options=[], value=None, multi=True, style=DD),
+    html.Div(id="pe-rolling-ctrl", style={"display":"none"}, children=[
+        html.P("Rolling window (rows)", style={**LBL,"marginTop":"8px"}),
+        dcc.Input(id="pe-rolling-window", value="20", type="number",
+                  min=2, max=500, style=INP),
+    ]),
 ], style={"width":"260px","minWidth":"260px","background":C["panel"],
           "borderRight":f"1px solid {C['border']}","padding":"18px","overflowY":"auto"})
 
@@ -1178,24 +1231,32 @@ def pe_merge(n, da, db, dca, dcb, tol):
 # ── Post-Expedition: axis dropdowns ──────────────────────────────────────────
 @app.callback(
     Output("pe-xaxis","options"), Output("pe-yaxis","options"),
+    Output("pe-ycols-b","options"),
     Input("pe-merged-store","data"),
 )
 def pe_axis_opts(dm):
-    if not dm: return [],[]
+    if not dm: return [],[],[]
     df = j2df(dm)
     opts = [{"label":c,"value":c} for c in df.columns]
-    return opts, opts
+    return opts, opts, opts
 
 @app.callback(
     Output("pe-xaxis","value"), Output("pe-yaxis","value"),
+    Output("pe-ycols-b","value"),
     Input("pe-xaxis","options"), prevent_initial_call=True,
 )
 def pe_axis_defaults(opts):
-    if not opts: return None,None
+    if not opts: return None, None, None
     cols = [o["value"] for o in opts]
-    depth = next((c for c in cols if "depth" in c.lower()),cols[0])
+    depth = next((c for c in cols if "depth" in c.lower()), cols[0])
+    # Split cols into _A suffix (dataset A) and _B suffix (dataset B)
+    a_cols = [c for c in cols if c.endswith("_A") and c != depth]
+    b_cols = [c for c in cols if c.endswith("_B") and c != depth]
+    # Fall back to first few non-depth cols if no suffix pattern
     others = [c for c in cols if c not in (depth,"depth_key")]
-    return depth, others[:4]
+    y_a = a_cols[:3] if a_cols else others[:2]
+    y_b = b_cols[:3] if b_cols else others[2:4]
+    return depth, y_a, y_b
 
 # ── Post-Expedition: merged expeditions readout ───────────────────────────────
 @app.callback(
@@ -1209,36 +1270,165 @@ def pe_merged_exp_readout(dm, selected):
     filtered = [e for e in exps if e in (selected or [])]
     return ", ".join(filtered) if filtered else "n/a"
 
+
+# ── Post-Expedition: show rolling window control only in rolling mode ─────────
+@app.callback(
+    Output("pe-rolling-ctrl","style"),
+    Input("pe-chart-mode","value"),
+)
+def pe_rolling_toggle(mode):
+    return {} if mode == "rolling" else {"display":"none"}
+
 # ── Post-Expedition: chart ────────────────────────────────────────────────────
 @app.callback(
     Output("pe-chart","figure"),
     Input("pe-merged-store","data"), Input("pe-exp-filter","value"),
     Input("pe-xaxis","value"), Input("pe-yaxis","value"),
+    Input("pe-ycols-b","value"), Input("pe-chart-mode","value"),
+    Input("pe-rolling-window","value"),
 )
-def pe_chart(dm, selected, xcol, ycols):
+def pe_chart(dm, selected, xcol, ycols_a, ycols_b, mode, rwin):
     if not dm or not xcol: return empty_fig("Merge two datasets to visualise")
     df = j2df(dm)
-    exp_col = next((c for c in df.columns if "expedition" in c.lower()),None)
+    exp_col = next((c for c in df.columns if "expedition" in c.lower()), None)
     if exp_col and selected:
         df = df[df[exp_col].astype(str).isin(selected)]
-    ycols = ycols or []
-    if isinstance(ycols,str): ycols=[ycols]
-    if not ycols: return empty_fig("Select Y axis columns")
-    fig = make_subplots(rows=1, cols=len(ycols), shared_yaxes=True, horizontal_spacing=0.02)
-    colors=[C["accent"],C["accent2"],C["accent3"],"#bc8cff","#ff7b72"]
-    for i,yc in enumerate(ycols):
-        if yc not in df.columns: continue
-        fig.add_trace(go.Scatter(x=df[yc], y=df[xcol], mode="lines", name=yc,
-                                  line=dict(color=colors[i%len(colors)],width=1.5)),
-                      row=1, col=i+1)
-        fig.update_xaxes(title_text=yc, gridcolor=C["border"], linecolor=C["border"],
-                         row=1, col=i+1)
-    cfg={**PLOT_CFG,"height":580}
-    cfg.pop("xaxis",None); cfg.pop("yaxis",None)
-    fig.update_yaxes(title_text=xcol, autorange="reversed",
-                     gridcolor=C["border"], linecolor=C["border"])
-    fig.update_layout(showlegend=True, **cfg)
-    return fig
+    df = df.dropna(subset=[xcol]).sort_values(xcol).reset_index(drop=True)
+
+    ycols_a = [ycols_a] if isinstance(ycols_a, str) else (ycols_a or [])
+    ycols_b = [ycols_b] if isinstance(ycols_b, str) else (ycols_b or [])
+    ycols_a = [c for c in ycols_a if c in df.columns]
+    ycols_b = [c for c in ycols_b if c in df.columns]
+    all_cols = ycols_a + ycols_b
+    if not all_cols: return empty_fig("Select columns for Dataset A and/or B")
+
+    colors_a = [C["accent"], "#bc8cff", "#ff7b72"]
+    colors_b = [C["accent3"], C["accent2"], "#f0883e"]
+    cfg_base = {**PLOT_CFG, "height": 600}
+    cfg_base.pop("xaxis", None); cfg_base.pop("yaxis", None)
+    axis_kw  = dict(gridcolor=C["border"], linecolor=C["border"])
+
+    # ── MODE 1: Depth tracks — independent x-axis per column ─────────────────
+    if mode == "tracks":
+        n_cols = len(all_cols)
+        fig = make_subplots(rows=1, cols=n_cols, shared_yaxes=True,
+                            horizontal_spacing=0.03)
+        for i, (yc, color) in enumerate(
+            [(c, colors_a[j % len(colors_a)]) for j, c in enumerate(ycols_a)] +
+            [(c, colors_b[j % len(colors_b)]) for j, c in enumerate(ycols_b)]
+        ):
+            sub = df[[xcol, yc]].dropna()
+            fig.add_trace(go.Scatter(
+                x=sub[yc], y=sub[xcol], mode="lines", name=yc,
+                line=dict(color=color, width=1.5),
+            ), row=1, col=i + 1)
+            fig.update_xaxes(title_text=yc, title_font=dict(size=10),
+                             **axis_kw, row=1, col=i + 1)
+        fig.update_yaxes(title_text=xcol + " (mbsf)", autorange="reversed",
+                         **axis_kw)
+        fig.update_layout(showlegend=False, **cfg_base)
+        return fig
+
+    # ── MODE 2: Correlation scatter — col_a vs col_b, coloured by depth ──────
+    if mode == "scatter":
+        if not ycols_a or not ycols_b:
+            return empty_fig("Select at least one column from each dataset")
+        xa = ycols_a[0]; xb = ycols_b[0]
+        sub = df[[xcol, xa, xb]].dropna()
+        fig = go.Figure(go.Scatter(
+            x=sub[xa], y=sub[xb],
+            mode="markers",
+            marker=dict(
+                color=sub[xcol],
+                colorscale="Viridis_r",
+                size=5, opacity=0.75,
+                colorbar=dict(title=xcol + " mbsf",
+                              tickfont=dict(color=C["muted"]),
+                              titlefont=dict(color=C["muted"])),
+                showscale=True,
+            ),
+            hovertemplate=f"{xa}: %{{x:.3g}}<br>{xb}: %{{y:.3g}}<br>depth: %{{marker.color:.1f}} mbsf<extra></extra>",
+        ))
+        # regression line
+        try:
+            m, b = np.polyfit(sub[xa].values, sub[xb].values, 1)
+            x_r = np.linspace(sub[xa].min(), sub[xa].max(), 200)
+            r = np.corrcoef(sub[xa].values, sub[xb].values)[0, 1]
+            fig.add_trace(go.Scatter(
+                x=x_r, y=m * x_r + b, mode="lines", name=f"r={r:.3f}",
+                line=dict(color=C["danger"], width=1.5, dash="dash"),
+            ))
+        except Exception:
+            pass
+        fig.update_layout(**{**PLOT_CFG, "height": 600},
+                          xaxis=dict(title=xa, **axis_kw),
+                          yaxis=dict(title=xb, **axis_kw),
+                          showlegend=True)
+        return fig
+
+    # ── MODE 3: Dual-axis overlay — two y-scales, shared depth axis ──────────
+    if mode == "dual":
+        if not ycols_a or not ycols_b:
+            return empty_fig("Select at least one column from each dataset")
+        ya = ycols_a[0]; yb = ycols_b[0]
+        fig = go.Figure()
+        sub_a = df[[xcol, ya]].dropna()
+        sub_b = df[[xcol, yb]].dropna()
+        fig.add_trace(go.Scatter(
+            x=sub_a[xcol], y=sub_a[ya], mode="lines", name=ya,
+            line=dict(color=C["accent"], width=1.5), yaxis="y1",
+        ))
+        fig.add_trace(go.Scatter(
+            x=sub_b[xcol], y=sub_b[yb], mode="lines", name=yb,
+            line=dict(color=C["accent3"], width=1.5, dash="dot"), yaxis="y2",
+        ))
+        layout = {**PLOT_CFG, "height": 600,
+            "xaxis":  dict(title=xcol + " (mbsf)", **axis_kw),
+            "yaxis":  dict(title=ya, color=C["accent"], **axis_kw),
+            "yaxis2": dict(title=yb, color=C["accent3"],
+                           overlaying="y", side="right",
+                           gridcolor="rgba(0,0,0,0)", linecolor=C["border"]),
+            "showlegend": True,
+            "legend": dict(bgcolor=C["panel"], bordercolor=C["border"], borderwidth=1),
+        }
+        fig.update_layout(**layout)
+        return fig
+
+    # ── MODE 4: Rolling mean comparison ───────────────────────────────────────
+    if mode == "rolling":
+        window = max(2, int(rwin or 20))
+        n_cols = len(all_cols)
+        fig = make_subplots(rows=1, cols=n_cols, shared_yaxes=True,
+                            horizontal_spacing=0.03)
+        for i, (yc, color) in enumerate(
+            [(c, colors_a[j % len(colors_a)]) for j, c in enumerate(ycols_a)] +
+            [(c, colors_b[j % len(colors_b)]) for j, c in enumerate(ycols_b)]
+        ):
+            sub = df[[xcol, yc]].dropna()
+            rolled = sub[yc].rolling(window, center=True, min_periods=1).mean()
+            # raw (faint)
+            fig.add_trace(go.Scatter(
+                x=sub[yc], y=sub[xcol], mode="lines", name=yc + " (raw)",
+                line=dict(color=color, width=0.6), opacity=0.35,
+                showlegend=False,
+            ), row=1, col=i + 1)
+            # smoothed (bold)
+            fig.add_trace(go.Scatter(
+                x=rolled, y=sub[xcol], mode="lines",
+                name=f"{yc}  (n={window})",
+                line=dict(color=color, width=2.5),
+            ), row=1, col=i + 1)
+            fig.update_xaxes(title_text=yc, title_font=dict(size=10),
+                             **axis_kw, row=1, col=i + 1)
+        fig.update_yaxes(title_text=xcol + " (mbsf)", autorange="reversed",
+                         **axis_kw)
+        fig.update_layout(showlegend=True,
+                          legend=dict(bgcolor=C["panel"], bordercolor=C["border"],
+                                      borderwidth=1, font=dict(size=10)),
+                          **cfg_base)
+        return fig
+
+    return empty_fig("Select a chart mode")
 
 # ── Post-Expedition: table ────────────────────────────────────────────────────
 @app.callback(
