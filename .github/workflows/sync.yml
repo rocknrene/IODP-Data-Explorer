@@ -7,7 +7,7 @@ jobs:
   sync-to-huggingface:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Push to Hugging Face
@@ -16,4 +16,4 @@ jobs:
         run: |
           git config user.email "action@github.com"
           git config user.name "GitHub Action"
-          git push https://rocknrene:$HF_TOKEN@huggingface.co/spaces/rocknrene/iodp-explorer main --force
+          git push https://rocknrene:$HF_TOKEN@huggingface.co/spaces/rocknrene/IODP-Data-Explorer main --force
