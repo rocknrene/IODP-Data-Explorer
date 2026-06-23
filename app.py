@@ -1,79 +1,26 @@
 # =============================================================================
 # IODP Explorer -- Interactive Data Visualization Dashboard
 # =============================================================================
-#
-# This app lets scientists explore International Ocean Discovery Program (IODP)
-# core data. It has two main modes:
-#
-#   SHIPBOARD       Load a single data file and explore it with charts and stats.
-#                   Designed for use during an expedition while coring is ongoing.
-#
-#   POST-EXPEDITION Load two datasets from different sources, merge them by depth,
-#                   and compare them visually using four science-oriented chart modes.
-#
-# SUPPORTED FILE TYPES
-#   .csv   comma-separated values (most common IODP export format)
-#   .xlsx  Excel spreadsheets
-#   .las   Log ASCII Standard, used in geophysical well logging
-#
-# DATA SOURCES IN POST-EXPEDITION MODE
-#   Upload / J-CORES  drag-and-drop a local file
-#                     (required for Chikyu/J-CORES/KCC/JAMSTEC data)
-#   LIMS/LORE         live fetch from the JRSO database at Texas A&M
-#                     (JOIDES Resolution expeditions 317 and later)
-#   PANGAEA           live fetch from the European data portal at Bremen
-#                     (Mission Specific Platform / ECORD expeditions)
-#
-# HOW TO RUN LOCALLY
-#   pip install dash plotly pandas openpyxl lasio requests
-#   python app.py
-#   Open http://localhost:7860 in your browser.
-#
-# DEPLOYMENT
-#   Hosted on Hugging Face Spaces. The server (gunicorn) imports this file
-#   and calls the "server" object, which is a standard Flask app.
-#   Port 7860 is the Hugging Face Spaces default.
-#
-# =============================================================================
+import io
+import base64
+import re
+import json
+import requests
 
-# --- Standard library imports -------------------------------------------------
-import io          # read files in memory (no temp files on disk)
-import base64      # decode uploaded files (Dash sends them as base64 text)
-import re          # regular expressions for pattern matching in text
-import json        # build URL filter parameters for LIMS requests
-import requests    # download data from the internet (LIMS, PANGAEA)
+import numpy as np
+import pandas as pd
+import lasio
 
-# --- Scientific computing -----------------------------------------------------
-import numpy as np   # math and array operations
-import pandas as pd  # DataFrames -- the main data structure throughout this app
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
 
-# --- File format support ------------------------------------------------------
-import lasio  # reads LAS (Log ASCII Standard) well log files
-
-# --- Plotting -----------------------------------------------------------------
-import plotly.graph_objects as go   # low-level Plotly (full control over charts)
-import plotly.express as px         # high-level Plotly shortcuts
-from plotly.subplots import make_subplots  # side-by-side chart panels
-
-# --- Web app framework --------------------------------------------------------
 from dash import Dash, dcc, html, Input, Output, State, dash_table
-# Dash turns Python into an interactive browser app.
-# dcc  = Dash Core Components: dropdowns, sliders, file uploaders, graphs
-# html = HTML elements: divs, paragraphs, buttons
-# Input/Output/State = wiring that connects components to callback functions
-# dash_table = interactive sortable/filterable data tables
-
-import flask  # the web server Dash runs on top of
+import flask
 
 # =============================================================================
 # COLOR THEMES
 # =============================================================================
-# Styles throughout the app use these color dictionaries.
-# "dark"  -- dark background, easy on screens and in low-light rooms.
-# "light" -- white background, better for printing and bright offices.
-# The active theme is swapped at runtime via a JavaScript clientside callback
-# that updates CSS custom properties on the page root element.
-#
 THEMES = {
     "dark": dict(
         bg="#0d1117", panel="#161b22", border="#30363d",
@@ -86,15 +33,8 @@ THEMES = {
         text="#1f2328", muted="#656d76", danger="#cf222e", warn="#9a6700",
     ),
 }
-# Default — overridden at runtime via dcc.Store
 C = THEMES["dark"]
-# =============================================================================
-# SHARED STYLE VARIABLES
-# =============================================================================
-# Reusable style dictionaries applied to many components.
-# In Dash, styles are Python dicts instead of separate CSS files.
 
-# Base Plotly layout applied to every chart figure
 PLOT_CFG = dict(
     paper_bgcolor=C["panel"], plot_bgcolor=C["bg"],
     font=dict(color=C["text"], family="monospace"),
@@ -103,32 +43,22 @@ PLOT_CFG = dict(
     colorway=[C["accent"], C["accent2"], C["accent3"], "#bc8cff", "#ff7b72"],
     margin=dict(l=55, r=20, t=40, b=50),
 )
-# Card style -- a bordered box used to wrap sections of content
 CARD = dict(background=C["panel"], border=f"1px solid {C['border']}",
             borderRadius="8px", padding="14px")
 FONT = "monospace"
-# Dropdown style
 DD   = {"background": C["panel"], "color": C["text"],
         "border": f"1px solid {C['border']}", "borderRadius": "4px"}
-# Section label style -- small uppercase text above sidebar controls
 LBL  = {"color": C["muted"], "fontSize": "10px", "letterSpacing": "2px",
         "marginBottom": "4px", "marginTop": "12px", "fontFamily": FONT}
-# Text input box style
 INP  = {"width": "100%", "background": C["bg"], "color": C["text"],
         "border": f"1px solid {C['border']}", "borderRadius": "4px",
         "padding": "4px 8px", "fontSize": "11px", "fontFamily": FONT,
         "boxSizing": "border-box"}
-# Button style factory -- call BTN(color) to get a style dict for a button
 BTN  = lambda bg: {"backgroundColor": bg, "color": C["bg"], "border": "none",
                    "borderRadius": "4px", "padding": "6px 12px", "cursor": "pointer",
                    "fontSize": "11px", "marginTop": "6px", "width": "100%",
                    "fontWeight": "700"}
 
-# =============================================================================
-# LITHOLOGY COLOR MAP
-# =============================================================================
-# Maps sediment/rock type names to display colors for the lithology track.
-# Colors follow conventions used in IODP core description publications.
 LITHO_COLORS = {
     "clay": "#1D9E75", "silty clay": "#5DCAA5", "silt": "#888780",
     "sand": "#EF9F27", "mtd": "#D85A30", "mtd / chaotic": "#D85A30",
@@ -139,14 +69,6 @@ LITHO_COLORS = {
 def litho_color(name):
     return LITHO_COLORS.get(str(name).lower().strip(), "#444441")
 
-# =============================================================================
-# DATA REPOSITORY CONFIGURATION
-# =============================================================================
-# URLs and report types for the three supported online data sources.
-
-# LIMS/LORE -- JRSO Laboratory Information Management System
-# Covers JOIDES Resolution (JR) expeditions 317 and later.
-# Physical data repository: Gulf Coast Repository (GCR), Texas A&M University. — GCR (TAMU), JR expeditions 317+
 LORE_BASE = "http://web.iodp.tamu.edu/LORE/"
 LORE_REPORTS = {
     "gra":       "GRA Bulk Density",
@@ -159,39 +81,71 @@ LORE_REPORTS = {
     "xrf":       "Shore XRF Summary",
 }
 
-# PANGAEA -- the European data portal run by MARUM, University of Bremen.
-# Covers Mission Specific Platform (MSP/ECORD) expeditions.
-# Physical data repository: Bremen Core Repository (BCR).
-# Direct tabular download: https://doi.pangaea.de/10.1594/PANGAEA.{id}?format=textfile
-# Search API: https://www.pangaea.de/api/datasets/search?q=...&count=20
 PANGAEA_ES      = "https://ws.pangaea.de/es/pangaea/panmd/_search"
 PANGAEA_DOI_DL  = "https://doi.pangaea.de/10.1594/PANGAEA.{pid}?format=textfile"
 
-# J-CORES (KCC/JAMSTEC) -- for Chikyu expeditions (343, 405, 319, etc.)
-# Physical repository: Kochi Core Center (KCC), Kochi University / JAMSTEC.
-# There is no public REST API for J-CORES, so those files must be uploaded manually. — upload only. Label this clearly in the UI.
-
-# =============================================================================
-# FILE PARSING HELPERS
-# =============================================================================
-# Keywords likely to appear in a real data header row.
-# Used to automatically skip title/metadata rows that appear before the data
-# in IODP supplementary tables (which often have DOI, title, and notes rows first).
 HEADER_KEYWORDS = [
     "depth", "lith", "facies", "unit", "section", "sample", "core",
     "upper", "lower", "top", "bottom", "description", "interval", "formation",
 ]
 
+# =============================================================================
+# FIX 1: LIMS CSV HEADER DETECTION
+# =============================================================================
+# LIMS CSV exports have metadata rows like:
+#   "Exp","Site","Hole","Core","Type","Sect","A/W","Offset (cm)","Depth CSF-A (m)",...
+# The actual column header is identifiable by LIMS-specific keywords.
+LIMS_HEADER_KEYWORDS = [
+    "exp", "site", "hole", "core", "type", "sect", "offset", "depth csf",
+    "depth mbsf", "depth (m", "csf-a", "mcd", "text id", "label id",
+]
+
+def is_lims_header_row(line):
+    """Check if a CSV line looks like a LIMS data header row."""
+    lower = line.lower()
+    hits = sum(1 for kw in LIMS_HEADER_KEYWORDS if kw in lower)
+    return hits >= 3
+
+def extract_lims_metadata(raw_bytes, encoding="utf-8"):
+    """
+    Scan the first ~30 rows of a LIMS CSV for metadata values (expedition, site, hole)
+    that appear in key:value style rows above the actual column header.
+    Returns dict with whatever we find.
+    """
+    meta = {}
+    try:
+        lines = raw_bytes.decode(encoding, errors="replace").splitlines()
+    except Exception:
+        return meta
+    for line in lines[:30]:
+        stripped = line.strip().strip('"')
+        # LIMS sometimes writes "Expedition: 400" or has it as a cell value
+        m = re.search(r'expedition["\s,]*[:\s]+["\s]*(\d+)', line, re.IGNORECASE)
+        if m and "expedition" not in meta:
+            meta["expedition"] = m.group(1)
+        m = re.search(r'\bsite["\s,]*[:\s]+["\s]*([A-Z]\d+)', line, re.IGNORECASE)
+        if m and "site" not in meta:
+            meta["site"] = m.group(1)
+        m = re.search(r'\bhole["\s,]*[:\s]+["\s]*([A-Z])\b', line, re.IGNORECASE)
+        if m and "hole" not in meta:
+            meta["hole"] = m.group(1)
+    return meta
+
 def detect_header_row(raw_bytes, encoding="utf-8", n_scan=30):
     """
-    Scan the first n_scan rows of a CSV and return the row index that most
-    looks like a real data header (highest count of HEADER_KEYWORDS matches).
-    IODP files often have title rows above the actual column names -- this skips them.
+    Scan first n_scan rows and return the row index that looks most like a
+    real data header. Prefers rows that match LIMS-style headers first,
+    then falls back to generic HEADER_KEYWORDS scoring.
     """
     try:
         lines = raw_bytes.decode(encoding, errors="replace").splitlines()
     except Exception:
         return 0
+    # LIMS-first pass
+    for i, line in enumerate(lines[:n_scan]):
+        if is_lims_header_row(line):
+            return i
+    # Generic fallback
     best_row, best_score = 0, 0
     for i, line in enumerate(lines[:n_scan]):
         score = sum(1 for kw in HEADER_KEYWORDS if kw in line.lower())
@@ -199,36 +153,44 @@ def detect_header_row(raw_bytes, encoding="utf-8", n_scan=30):
             best_score, best_row = score, i
     return best_row
 
-# ── File parsing ───────────────────────────────────────────────────────────────
+# =============================================================================
+# FILE PARSING
+# =============================================================================
 def parse_upload(contents, filename):
     """
-    Decode a file uploaded through the Dash upload widget and return a DataFrame.
-
-    Dash sends uploaded files as base64-encoded strings (text), so we decode
-    them back to bytes before reading. Supports CSV, Excel, and LAS formats.
-
-    Returns (df, meta) where meta is a dict with file info.
-    If parsing fails, df is None and meta contains an "error" key.
+    Decode a Dash-uploaded file and return (DataFrame, meta).
+    Now supports .csv, .tsv, .xlsx, .xls, .las
     """
     _, b64 = contents.split(",")
     raw    = base64.b64decode(b64)
     fname  = filename.lower()
     meta   = {"filename": filename}
     try:
-        if fname.endswith(".csv"):
+        # FIX 6: Accept TSV files
+        if fname.endswith(".csv") or fname.endswith(".tsv"):
+            sep = "\t" if fname.endswith(".tsv") else ","
             df = None
+            lims_meta = {}
             for enc in ["utf-8", "latin-1", "cp1252", "utf-16"]:
                 try:
                     header_row = detect_header_row(raw, encoding=enc)
+                    # Try to grab LIMS metadata from rows above header
+                    if header_row > 0:
+                        lims_meta = extract_lims_metadata(raw, encoding=enc)
                     df = pd.read_csv(io.StringIO(raw.decode(enc)),
-                                     header=header_row, skip_blank_lines=True)
+                                     header=header_row, skip_blank_lines=True,
+                                     sep=sep)
                     df = df.dropna(axis=1, how="all").dropna(how="all").reset_index(drop=True)
                     break
                 except Exception:
                     continue
             if df is None:
-                return None, {"error": "Could not decode CSV"}
-            meta["format"] = "CSV"
+                return None, {"error": f"Could not decode {'TSV' if fname.endswith('.tsv') else 'CSV'}"}
+            meta["format"] = "TSV" if fname.endswith(".tsv") else "CSV"
+            # FIX 1: Attach LIMS metadata if found
+            if lims_meta:
+                meta["lims_meta"] = lims_meta
+
         elif fname.endswith((".xlsx", ".xls")):
             best_df, best_score = None, -1
             for skip in range(0, 20):
@@ -257,7 +219,8 @@ def parse_upload(contents, filename):
             try:    meta["well"] = las.well.WELL.value
             except: meta["well"] = ""
         else:
-            return None, {"error": "Unsupported file type: " + filename}
+            # FIX 6: Improved error message listing supported formats
+            return None, {"error": f"Unsupported file type: {filename}\nSupported formats: .csv, .tsv, .xlsx, .xls, .las"}
         meta.update(rows=len(df), cols=len(df.columns),
                     columns=list(df.columns),
                     numeric_cols=df.select_dtypes(include="number").columns.tolist())
@@ -266,29 +229,18 @@ def parse_upload(contents, filename):
         return None, {"error": str(e)}
 
 def df2j(df):
-    """Serialize a DataFrame to JSON for storage in dcc.Store.
-    dcc.Store can only hold strings/dicts, not DataFrames directly."""
     return df.to_json(date_format="iso", orient="split") if df is not None else None
 
 def j2df(j):
-    """Deserialize a JSON string from dcc.Store back into a DataFrame."""
     return pd.read_json(io.StringIO(j), orient="split") if j else None
 
 def empty_fig(msg="Upload a file to begin", color=None):
-    """Return a blank Plotly figure with a centered message.
-    Used as a placeholder before data is loaded."""
     fig = go.Figure()
     fig.update_layout(**PLOT_CFG, annotations=[dict(
         text=msg, xref="paper", yref="paper", x=0.5, y=0.5,
         showarrow=False, font=dict(color=color or C["muted"], size=15))])
     return fig
 
-# =============================================================================
-# LITHOLOGY COLUMN DETECTION
-# =============================================================================
-# IODP litho files use many different column name formats across expeditions.
-# This section handles that variety by matching against known aliases.
-# For each required internal column name, list all real-world name variations
 LITHO_COLUMN_ALIASES = [
     ("top_mbsf",    ["top depth csf","top depth","upper depth","depth top",
                      "topdepth","top_depth","top_mbsf","top (m","top_csf"]),
@@ -301,11 +253,6 @@ LITHO_COLUMN_ALIASES = [
 ]
 
 def resolve_litho_columns(df):
-    """
-    Identify the top depth, bottom depth, and lithology columns in an uploaded
-    litho file, even if the column names do not match the expected standard.
-    Returns (renamed_df, None) on success, or (None, error_string) on failure.
-    """
     cols_lower = {c.lower().strip(): c for c in df.columns}
     mapping = {}
     for internal_name, aliases in LITHO_COLUMN_ALIASES:
@@ -337,21 +284,52 @@ def resolve_litho_columns(df):
 # =============================================================================
 def infer_site_meta(df, meta):
     """
-    Try to automatically extract expedition/site info from column contents.
-    Looks for JCORES-style sample IDs (e.g. C0019J-6K-1) and depth columns.
-    Returns a dict of whatever it can find; missing values are filled in later
-    from the manual metadata fields the user can type into the sidebar.
+    Auto-extract expedition/site info. Now also reads LIMS metadata if detected.
     """
     info = {}
     cols_lower = {c.lower(): c for c in df.columns}
-    for cand in ["jcores_sampleid","sampleid","sample_id","sample"]:
-        if cand in cols_lower:
-            first = str(df[cols_lower[cand]].dropna().iloc[0]) if len(df) else ""
-            m = re.match(r"([A-Z]\d{3,4}[A-Z]?)", first)
-            if m:
-                info["site_hole"] = m.group(1)
-            break
-    for cand in ["topdepth_mbsf","topdepth_mbsf_mcsf-a","depth_mbsf","dept","depth","top_depth","top_mbsf"]:
+
+    # FIX 1: Pull from LIMS-detected metadata first
+    lims_meta = meta.get("lims_meta", {})
+    if lims_meta.get("expedition"):
+        info["expedition"] = lims_meta["expedition"]
+    if lims_meta.get("site") and lims_meta.get("hole"):
+        info["site_hole"] = lims_meta["site"] + lims_meta["hole"]
+    elif lims_meta.get("site"):
+        info["site_hole"] = lims_meta["site"]
+
+    # Also try to read from column values (Exp, Site, Hole columns in LIMS data)
+    for col_key, info_key in [("exp","expedition"), ("expedition","expedition")]:
+        if col_key in cols_lower and info_key not in info:
+            vals = df[cols_lower[col_key]].dropna().astype(str).unique()
+            if len(vals):
+                info[info_key] = vals[0]
+    # Build site_hole from Site+Hole columns
+    if "site_hole" not in info:
+        site_val = hole_val = None
+        for cand in ["site"]:
+            if cand in cols_lower:
+                v = df[cols_lower[cand]].dropna().astype(str).unique()
+                if len(v): site_val = v[0]
+        for cand in ["hole"]:
+            if cand in cols_lower:
+                v = df[cols_lower[cand]].dropna().astype(str).unique()
+                if len(v): hole_val = v[0]
+        if site_val:
+            info["site_hole"] = site_val + (hole_val or "")
+
+    # JCORES-style ID fallback
+    if "site_hole" not in info:
+        for cand in ["jcores_sampleid","sampleid","sample_id","sample"]:
+            if cand in cols_lower:
+                first = str(df[cols_lower[cand]].dropna().iloc[0]) if len(df) else ""
+                m = re.match(r"([A-Z]\d{3,4}[A-Z]?)", first)
+                if m:
+                    info["site_hole"] = m.group(1)
+                break
+
+    for cand in ["topdepth_mbsf","topdepth_mbsf_mcsf-a","depth_mbsf","dept","depth",
+                 "top_depth","top_mbsf","depth csf-a (m)","depth (m)"]:
         if cand in cols_lower:
             v = df[cols_lower[cand]].dropna()
             if len(v):
@@ -364,10 +342,6 @@ def infer_site_meta(df, meta):
     return info
 
 def build_metadata_bar(info, manual):
-    """
-    Build the site metadata banner shown at the top of the Shipboard tab.
-    Combines auto-detected values (info) with manual overrides (manual).
-    """
     def field(label, value):
         return html.Div([
             html.Div(label, style={"color":C["muted"],"fontSize":"9px",
@@ -376,7 +350,7 @@ def build_metadata_bar(info, manual):
                                    "fontWeight":"600","fontFamily":FONT}),
         ], style={"marginRight":"20px"})
     site_hole  = manual.get("site_hole")  or info.get("site_hole","—")
-    expedition = manual.get("expedition") or "—"
+    expedition = manual.get("expedition") or info.get("expedition","—")
     lat  = manual.get("lat")  or "—"
     lon  = manual.get("lon")  or "—"
     water_d  = manual.get("water_depth") or "—"
@@ -409,12 +383,6 @@ def build_metadata_bar(info, manual):
 # CORE-TOP, QC, AND GAP HELPERS
 # =============================================================================
 def extract_core_tops(df):
-    """
-    Parse JCORES sample IDs (e.g. C0019J-6K-1) to find the minimum depth
-    (core top) for each core. Core-top ticks help scientists orient themselves
-    in depth profiles -- they mark where each new core section begins.
-    Returns a dict like {"C0019J-6K": 45.3, "C0019J-7K": 52.1, ...}
-    """
     cols_lower = {c.lower(): c for c in df.columns}
     id_col, depth_col = None, None
     for cand in ["jcores_sampleid","sampleid","sample_id","sample"]:
@@ -436,20 +404,12 @@ def extract_core_tops(df):
     return core_tops
 
 def find_qc_col(df):
-    """Return the first column whose name contains the word "comment", or None.
-    QC (quality control) comment columns flag measurements that may be unreliable."""
     for col in df.columns:
         if re.search(r"comment", col, re.IGNORECASE):
             return col
     return None
 
 def find_recovery_gaps(df, depth_col, gap_threshold_m=5.0):
-    """
-    Find depth intervals where consecutive measurements are more than
-    gap_threshold_m meters apart. These indicate intervals where the drill
-    advanced but no core was recovered -- the core "fell out" of the barrel.
-    Returns a list of (gap_top, gap_bottom) tuples in meters below seafloor (mbsf).
-    """
     if depth_col not in df.columns:
         return []
     depths = df[depth_col].dropna().sort_values().values
@@ -461,16 +421,6 @@ def find_recovery_gaps(df, depth_col, gap_threshold_m=5.0):
 # ONLINE DATA FETCH HELPERS
 # =============================================================================
 def fetch_lore(report_name, expedition, site="", hole=""):
-    """
-    Download data from the IODP LIMS/LORE database at Texas A&M University.
-    Works for JOIDES Resolution expeditions 317 and later.
-
-    The LORE URL accepts filter parameters that specify which expedition,
-    site, hole, and measurement type to return. The response is a CSV file.
-
-    Returns (DataFrame, None) on success, or (None, error_string) on failure.
-    """
-    """Fetch from LIMS/LORE (GCR/TAMU) — JR expeditions 317+."""
     filters = [f"x_expedition in ('{expedition}')"]
     if site: filters.append(f"x_site in ('{site}')")
     if hole: filters.append(f"x_hole in ('{hole}')")
@@ -487,26 +437,12 @@ def fetch_lore(report_name, expedition, site="", hole=""):
     except Exception as e:
         return None, str(e)
 
-
 def fetch_pangaea_doi(pangaea_id):
-    """
-    Download a single dataset from PANGAEA by its numeric dataset ID.
-
-    The ID is the number at the end of a PANGAEA DOI:
-        Full DOI: 10.1594/PANGAEA.938129
-        Numeric ID: 938129
-
-    PANGAEA text file exports include comment lines starting with "//"
-    (metadata header) that we strip before parsing the tab-separated data.
-
-    Returns (DataFrame, None) on success, or (None, error_string) on failure.
-    """
     url = PANGAEA_DOI_DL.format(pid=pangaea_id)
     try:
         r = requests.get(url, timeout=60)
         r.raise_for_status()
         text = r.text
-        # PANGAEA textfile format has comment lines starting with //
         lines = [l for l in text.splitlines() if not l.startswith("//")]
         clean = "\n".join(lines)
         df = pd.read_csv(io.StringIO(clean), sep="\t", skip_blank_lines=True)
@@ -517,19 +453,7 @@ def fetch_pangaea_doi(pangaea_id):
     except Exception as e:
         return None, str(e)
 
-
 def search_pangaea(query, count=10):
-    """
-    Search the PANGAEA database using its Elasticsearch API.
-    Returns a list of result dicts with "label" and "value" keys, ready for
-    use in a Dash Dropdown component.
-
-    The Elasticsearch endpoint accepts a JSON query body and returns matching
-    dataset records including their DOI (from which we extract the numeric ID).
-
-    Returns (results_list, None) on success, or ([], error_string) on failure.
-    """
-    """Search PANGAEA via Elasticsearch and return list of {label, value} dicts."""
     body = {
         "query": {"query_string": {"query": query, "default_operator": "AND"}},
         "size": count,
@@ -544,7 +468,6 @@ def search_pangaea(query, count=10):
         for h in hits:
             src   = h.get("_source", {})
             uri   = src.get("URI", "")
-            # URI looks like "https://doi.pangaea.de/10.1594/PANGAEA.938129"
             pid   = uri.split(".")[-1] if uri else h.get("_id", "")
             title = src.get("title", uri)
             if pid:
@@ -553,34 +476,13 @@ def search_pangaea(query, count=10):
     except Exception as e:
         return [], str(e)
 
-
 def find_depth_col(df):
-    """
-    Return the name of the column most likely to contain depth values (mbsf).
-    Searches for common IODP depth column name patterns.
-    Falls back to the first column if nothing matches.
-    """
     for c in df.columns:
         if any(k in c.lower() for k in ["depth","mbsf","mcsf","top_depth"]):
             return c
     return df.columns[0]
 
 def depth_tolerance_merge(dfa, dfb, tol_cm=2):
-    """
-    Merge two datasets by depth, treating measurements within tol_cm centimeters
-    of each other as being at the same depth.
-
-    This tolerance is necessary because two instruments measuring the same core
-    will almost never sample at exactly the same depth points. For example,
-    GRA bulk density might be measured every 2 cm while P-wave velocity is every
-    5 cm -- a depth-tolerance join links them without requiring exact matches.
-
-    Uses pandas merge_asof which matches each row in A to the nearest row in B
-    within the tolerance window. Columns from both datasets appear side by side
-    in the result, with _A and _B suffixes to distinguish them.
-
-    Both input DataFrames must have a column named "depth_key" (in meters).
-    """
     tol_m = tol_cm / 100.0
     a = dfa.copy().sort_values("depth_key").reset_index(drop=True)
     b = dfb.copy().sort_values("depth_key").reset_index(drop=True)
@@ -588,10 +490,6 @@ def depth_tolerance_merge(dfa, dfb, tol_cm=2):
                          direction="nearest", suffixes=("_A","_B"))
 
 def get_expeditions_from_df(df):
-    """
-    Look for an expedition number column and return a sorted list of unique values.
-    Used to populate the expedition filter checkboxes in the Post-Expedition tab.
-    """
     for c in df.columns:
         if "expedition" in c.lower() or c.lower() in ("exp","exp."):
             return sorted(df[c].dropna().astype(str).unique().tolist())
@@ -599,16 +497,26 @@ def get_expeditions_from_df(df):
 
 # =============================================================================
 # CHART BUILDER (SHIPBOARD TAB)
+# FIX 2: Y-axis inverted by default for depth plots
+# FIX 3: Layer toggles working (fixed trace visibility logic)
 # =============================================================================
 def make_chart(df, ctype, x, y, color, curves,
-               litho_df=None, show_gaps=True, show_qc=True, show_core_tops=True):
+               litho_df=None, show_gaps=True, show_qc=True, show_core_tops=True,
+               invert_y=True):
     if ctype == "scatter" and x and y:
         cc = None if color in (None,"None","") else color
-        return (px.scatter(df, x=x, y=y, color=cc, opacity=0.75)
-                .update_traces(marker=dict(size=5))
-                .update_layout(**PLOT_CFG))
+        fig = (px.scatter(df, x=x, y=y, color=cc, opacity=0.75)
+               .update_traces(marker=dict(size=5))
+               .update_layout(**PLOT_CFG))
+        # FIX 2: invert y-axis when depth is on Y
+        if invert_y:
+            fig.update_yaxes(autorange="reversed")
+        return fig
     if ctype == "line" and x and y:
-        return px.line(df, x=x, y=y).update_layout(**PLOT_CFG)
+        fig = px.line(df, x=x, y=y).update_layout(**PLOT_CFG)
+        if invert_y:
+            fig.update_yaxes(autorange="reversed")
+        return fig
     if ctype == "histogram" and x:
         return (px.histogram(df, x=x, nbins=40,
                              color_discrete_sequence=[C["accent"]])
@@ -621,6 +529,7 @@ def make_chart(df, ctype, x, y, color, curves,
         return (px.imshow(corr, text_auto=True, aspect="auto",
                           color_continuous_scale="RdBu_r", zmin=-1, zmax=1)
                 .update_layout(**PLOT_CFG, height=420))
+
     if ctype == "depthlog" and x and curves:
         sel = [c for c in curves if c in df.columns]
         if not sel:
@@ -664,9 +573,13 @@ def make_chart(df, ctype, x, y, color, curves,
             qc_depths = df.loc[qc_mask, x].dropna().tolist()
         for i, col in enumerate(sel):
             mask = df[col].notna() & df[x].notna()
+            # FIX 3: Each curve gets its own legendgroup so toggles actually work.
+            # Using legendgroup + legendgrouptitle ensures clicking the legend
+            # entry hides/shows only that trace (and its QC/gap companions).
             fig.add_trace(go.Scatter(
                 x=df.loc[mask,col], y=df.loc[mask,x], mode="lines", name=col,
-                line=dict(color=pal[i%len(pal)], width=1.5)),
+                line=dict(color=pal[i%len(pal)], width=1.5),
+                legendgroup=col, showlegend=True),
                 row=1, col=col_offset+i)
             for gap_top, gap_bot in gaps:
                 fig.add_hrect(y0=gap_top, y1=gap_bot, fillcolor="#888780",
@@ -679,7 +592,8 @@ def make_chart(df, ctype, x, y, color, curves,
                 if len(qc_df):
                     fig.add_trace(go.Scatter(
                         x=qc_df[col], y=qc_df[x], mode="markers",
-                        name="QC flagged" if i==0 else "", showlegend=(i==0),
+                        name="QC flagged", showlegend=(i==0),
+                        legendgroup="qc_flags",
                         marker=dict(symbol="circle-open", size=8,
                                     color=C["danger"], line_width=1.5),
                         hovertemplate="%{y:.2f} mbsf - QC flagged<extra></extra>"),
@@ -700,25 +614,21 @@ def make_chart(df, ctype, x, y, color, curves,
                                        xanchor="left", yanchor="middle",
                                        row=1, col=col_offset+i)
         fig.update_yaxes(autorange="reversed", title_text=x, row=1, col=1)
-        cfg = {**PLOT_CFG, "height":620}
+        # FIX 8: Use a fixed, scroll-safe height. The depth log now uses
+        # a constrained height so the controls below it remain accessible.
+        cfg = {**PLOT_CFG, "height": 560}
         cfg.pop("xaxis",None); cfg.pop("yaxis",None)
         return fig.update_layout(showlegend=True,
-                                 legend=dict(x=1.01,y=1,font=dict(size=10)), **cfg)
+                                 legend=dict(x=1.01,y=1,font=dict(size=10)),
+                                 **cfg)
     return empty_fig("Select axes to plot")
 
 # =============================================================================
 # DASH APP INITIALIZATION
 # =============================================================================
-
-server = flask.Flask(__name__)  # the underlying Flask web server
+server = flask.Flask(__name__)
 app    = Dash(__name__, server=server, suppress_callback_exceptions=True)
-# suppress_callback_exceptions=True is needed because tab content is generated
-# dynamically -- Dash would otherwise error when callbacks reference components
-# that haven't been rendered yet.
 
-# Inject CSS into the page <head>.
-# Sets CSS custom properties for theming and overrides Dash's internal dropdown
-# styles (which ignore the normal "style" prop and require !important overrides).
 app.index_string = """<!DOCTYPE html>
 <html>
 <head>
@@ -734,7 +644,6 @@ app.index_string = """<!DOCTYPE html>
     --dd-bg:#21262d; --dd-hover:#30363d;
   }
   body { background:var(--bg) !important; color:var(--text) !important; }
-  /* Dash dropdown internals */
   .Select-menu-outer,.VirtualizedSelectOption,.Select-option
     { background-color:var(--dd-bg)!important; color:var(--text)!important; }
   .Select-option:hover,.Select-option.is-focused
@@ -753,16 +662,26 @@ app.index_string = """<!DOCTYPE html>
     { background-color:var(--accent)!important; color:var(--bg)!important; }
   .Select-arrow { border-top-color:var(--muted)!important; }
   .Select-clear { color:var(--muted)!important; }
-  /* DataTable */
   .dash-spreadsheet-container .dash-spreadsheet-inner th
     { background-color:var(--bg)!important; color:var(--accent)!important; }
   .dash-spreadsheet-container .dash-spreadsheet-inner td
     { background-color:var(--panel)!important; color:var(--text)!important; }
-  /* Tab bar */
   .tab { background-color:var(--panel)!important; color:var(--muted)!important; }
   .tab--selected { background-color:var(--bg)!important; color:var(--text)!important; }
-  /* Smooth theme transition */
   * { transition: background-color 0.25s, color 0.25s, border-color 0.25s; }
+
+  /* FIX 5: Data table independent scroll */
+  .iodp-table-scroll {
+    max-height: 320px;
+    overflow-y: auto;
+    overflow-x: auto;
+  }
+
+  /* FIX 8: Depth log layout — prevent the chart from pushing controls off screen */
+  .depthlog-graph-container {
+    max-height: 600px;
+    overflow: hidden;
+  }
 </style>
 </head>
 <body>
@@ -780,31 +699,39 @@ TAB_SEL   = {**TAB_STYLE,"backgroundColor":C["bg"],"color":C["text"],
 # =============================================================================
 # SHIPBOARD SIDEBAR LAYOUT
 # =============================================================================
-# The left panel containing all controls for the Shipboard tab.
 shipboard_sidebar = html.Div([
     html.P("DATA SOURCE", style=LBL),
+    # FIX 6: Updated upload box to list all accepted formats including .tsv
     dcc.Upload(id="upload", multiple=False,
         children=html.Div([
             html.Div("↑", style={"fontSize":"26px","color":C["accent"]}),
-            html.Div("Drop file or click"),
-            html.Div(".csv .xlsx .las", style={"color":C["muted"],"fontSize":"10px"}),
+            html.Div("Drop file or click to upload"),
+            html.Div("Accepted: .csv  .tsv  .xlsx  .las",
+                     style={"color":C["muted"],"fontSize":"10px","marginTop":"3px"}),
         ], style={"textAlign":"center","color":C["text"],"fontSize":"12px"}),
         style={"border":f"2px dashed {C['border']}","borderRadius":"8px",
                "padding":"16px","cursor":"pointer","marginBottom":"10px"}),
-    html.P("LITHO TRACK (optional)", style=LBL),
-    html.Div("CSV or Excel: top depth, bottom depth, lithology columns",
-             style={"color":C["muted"],"fontSize":"9px","marginBottom":"4px","fontFamily":FONT}),
+
+    # FIX 7: Clarify litho upload purpose — it layers on top, doesn't replace main data
+    html.P("LITHO TRACK (optional, layers on chart)", style=LBL),
+    html.Div("Upload a separate CSV/XLSX with top depth, bottom depth, and lithology columns. "
+             "This adds a color-coded lithology lane to depth log view — it does not replace your main data file.",
+             style={"color":C["muted"],"fontSize":"9px","marginBottom":"4px","fontFamily":FONT,
+                    "lineHeight":"1.4"}),
+    html.Div("Accepted: .csv  .tsv  .xlsx",
+             style={"color":C["muted"],"fontSize":"9px","marginBottom":"6px","fontFamily":FONT}),
     dcc.Upload(id="upload-litho", multiple=False,
         children=html.Div([
             html.Div("↑", style={"fontSize":"18px","color":C["accent3"]}),
-            html.Div("Drop litho file"),
+            html.Div("Drop litho file or click"),
         ], style={"textAlign":"center","color":C["text"],"fontSize":"11px"}),
         style={"border":f"2px dashed {C['border']}","borderRadius":"8px",
                "padding":"10px","cursor":"pointer","marginBottom":"4px"}),
     html.Div(id="litho-badge"),
+
     html.Hr(style={"borderColor":C["border"],"margin":"14px 0"}),
     html.P("SITE METADATA (optional)", style=LBL),
-    html.Div("Auto-detected where possible:",
+    html.Div("Auto-detected from LIMS CSV where possible. Fill in any missing fields:",
              style={"color":C["muted"],"fontSize":"9px","marginBottom":"6px"}),
     *[html.Div([
         html.Div(label, style={**LBL,"marginTop":"6px"}),
@@ -817,6 +744,7 @@ shipboard_sidebar = html.Div([
         ("WATER DEPTH m","meta-water-depth","e.g. 6897"),
         ("RECOVERY %","meta-recovery","e.g. 68.4"),
     ]],
+
     html.Hr(style={"borderColor":C["border"],"margin":"14px 0"}),
     html.P("X AXIS (depth)", style=LBL),
     dcc.Dropdown(id="x-col", placeholder="Select column...", style=DD),
@@ -830,6 +758,7 @@ shipboard_sidebar = html.Div([
                                "color":C["text"],"fontSize":"12px"},
                   inputStyle={"marginRight":"6px","accentColor":C["accent"]},
                   style={"display":"none"}),
+
     html.Hr(style={"borderColor":C["border"],"margin":"14px 0"}),
     html.P("DEPTH LOG OVERLAYS", style=LBL),
     dcc.Checklist(id="overlay-opts",
@@ -840,6 +769,17 @@ shipboard_sidebar = html.Div([
         labelStyle={"display":"block","marginBottom":"6px",
                     "color":C["text"],"fontSize":"11px","fontFamily":FONT},
         inputStyle={"marginRight":"6px","accentColor":C["accent"]}),
+
+    # FIX 2: Y-axis invert toggle
+    html.Hr(style={"borderColor":C["border"],"margin":"14px 0"}),
+    html.P("AXIS OPTIONS", style=LBL),
+    dcc.Checklist(id="axis-opts",
+        options=[{"label":" Invert Y-axis (depth: 0 at top)","value":"invert_y"}],
+        value=["invert_y"],
+        labelStyle={"display":"block","marginBottom":"6px",
+                    "color":C["text"],"fontSize":"11px","fontFamily":FONT},
+        inputStyle={"marginRight":"6px","accentColor":C["accent"]}),
+
     html.Hr(style={"borderColor":C["border"],"margin":"14px 0"}),
     html.P("CHART TYPE", style={**LBL,"marginTop":"18px"}),
     dcc.RadioItems(id="chart-type", value="scatter",
@@ -852,18 +792,12 @@ shipboard_sidebar = html.Div([
                     "color":C["text"],"fontSize":"12px","fontFamily":FONT},
         inputStyle={"marginRight":"7px","accentColor":C["accent"]}),
 ], style={"width":"240px","minWidth":"240px","background":C["panel"],
-          "borderRight":f"1px solid {C['border']}","padding":"18px","overflowY":"auto"})
+          "borderRight":f"1px solid {C['border']}","padding":"18px",
+          "overflowY":"auto","height":"100%"})
 
 
-# ── Post-Expedition dataset fetch panel ────────────────────────────────────────
+# ── Post-Expedition dataset fetch panel ──────────────────────────────────────
 def dataset_panel(ds):
-    """
-    Build the Dataset A or B fetch panel in the Post-Expedition sidebar.
-    Each panel offers three data source options:
-      Upload    -- drag and drop a local file (required for J-CORES/KCC data)
-      LIMS/LORE -- live fetch from the JRSO database
-      PANGAEA   -- live fetch from the European IODP portal
-    """
     accent = C["accent"] if ds == "a" else C["accent3"]
     label  = "DATASET A" if ds == "a" else "DATASET B"
     repo_hint = html.Div([
@@ -899,20 +833,19 @@ def dataset_panel(ds):
                         "fontSize":"11px","marginBottom":"3px"},
             inputStyle={"marginRight":"6px","accentColor":accent},
         ),
-
-        # Upload panel
         html.Div(id=f"pe-{ds}-upload-panel", children=[
             dcc.Upload(id=f"pe-{ds}-upload", multiple=False,
-                children=html.Div("Drop file or click",
-                    style={"color":C["muted"],"fontSize":"11px",
-                           "textAlign":"center","padding":"10px 0"}),
+                children=html.Div([
+                    html.Div("Drop file or click to upload",
+                             style={"color":C["muted"],"fontSize":"11px","textAlign":"center"}),
+                    html.Div("Accepted: .csv  .tsv  .xlsx  .las",
+                             style={"color":C["muted"],"fontSize":"9px","textAlign":"center","marginTop":"2px"}),
+                ], style={"padding":"10px 0"}),
                 style={"border":f"1px dashed {C['border']}","borderRadius":"6px",
                        "backgroundColor":C["bg"],"cursor":"pointer","marginTop":"6px"}),
             html.Div(id=f"pe-{ds}-upload-status",
                      style={"fontSize":"10px","color":C["accent2"],"marginTop":"4px"}),
         ]),
-
-        # LIMS panel
         html.Div(id=f"pe-{ds}-lims-panel", style={"display":"none"}, children=[
             html.P("Report type", style={**LBL,"marginTop":"6px"}),
             dcc.Dropdown(id=f"pe-{ds}-report",
@@ -929,8 +862,6 @@ def dataset_panel(ds):
             html.Div(id=f"pe-{ds}-lims-status",
                      style={"fontSize":"10px","color":C["accent2"],"marginTop":"4px"}),
         ]),
-
-        # PANGAEA panel
         html.Div(id=f"pe-{ds}-pangaea-panel", style={"display":"none"}, children=[
             html.P("PANGAEA dataset ID", style={**LBL,"marginTop":"6px"}),
             html.Div("Enter the numeric ID from the DOI (e.g. 938129 from 10.1594/PANGAEA.938129)",
@@ -946,8 +877,7 @@ def dataset_panel(ds):
                       style={**INP,"marginTop":"4px"}),
             html.Button("Search", id=f"pe-search-{ds}-pangaea",
                         n_clicks=0, style=BTN(C["border"])),
-            html.Div(id=f"pe-{ds}-pangaea-results",
-                     style={"marginTop":"6px"}),
+            html.Div(id=f"pe-{ds}-pangaea-results", style={"marginTop":"6px"}),
             html.Div(id=f"pe-{ds}-pangaea-status",
                      style={"fontSize":"10px","color":C["accent2"],"marginTop":"4px"}),
         ]),
@@ -960,10 +890,8 @@ post_sidebar = html.Div([
                                      "color":C["muted"],"letterSpacing":"3px"}),
     html.Div("Multi-dataset merge with depth tolerance matching.",
              style={"color":C["muted"],"fontSize":"9px","marginBottom":"12px"}),
-
     dataset_panel("a"),
     dataset_panel("b"),
-
     html.P("MERGE SETTINGS", style={**LBL,"marginTop":"0"}),
     html.Div("Depth tolerance (cm)", style={"color":C["muted"],"fontSize":"10px","marginBottom":"4px"}),
     dcc.Input(id="pe-tolerance", value="2", type="number", min=0, max=500, style=INP),
@@ -1003,8 +931,6 @@ post_sidebar = html.Div([
 # =============================================================================
 # APP LAYOUT
 # =============================================================================
-# Defines the full structure of the web page.
-# Components with an "id" can be read from or updated by callback functions.
 app.layout = html.Div([
     html.Div([
         html.Div([
@@ -1024,7 +950,6 @@ app.layout = html.Div([
     ], style={"display":"flex","justifyContent":"space-between","alignItems":"center",
               "padding":"8px 20px","background":C["panel"],
               "borderBottom":f"1px solid {C['border']}"}),
-    # Theme toggle — injected into page background wrapper via clientside callback
     html.Div(id="theme-root", style={"display":"none"}),
 
     dcc.Tabs(id="main-tabs", value="shipboard", style={"fontFamily":FONT},
@@ -1035,7 +960,6 @@ app.layout = html.Div([
 
     html.Div(id="tab-content"),
 
-    # Stores
     dcc.Store(id="theme-store",      storage_type="local", data="dark"),
     dcc.Store(id="store-df",        storage_type="session"),
     dcc.Store(id="store-meta",      storage_type="session"),
@@ -1053,9 +977,6 @@ app.layout = html.Div([
 # =============================================================================
 @app.callback(Output("tab-content","children"), Input("main-tabs","value"))
 def render_tab(tab):
-    """Render the content area for the active tab.
-    Content is built dynamically so both tabs can share the same component IDs.
-    """
     if tab == "shipboard":
         return html.Div([
             html.Div(id="meta-banner",
@@ -1064,19 +985,30 @@ def render_tab(tab):
                                 "padding":"10px 20px","fontFamily":FONT})),
             html.Div([
                 shipboard_sidebar,
+                # FIX 8: Main content area scrolls independently from sidebar
                 html.Div([
                     html.Div(id="kpi-bar",
                              style={"display":"flex","gap":"10px","padding":"10px 18px",
                                     "borderBottom":f"1px solid {C['border']}","flexWrap":"wrap"}),
-                    html.Div(dcc.Graph(id="main-chart", style={"height":"620px"},
-                                       config={"displayModeBar":True,"scrollZoom":True}),
-                             style={"padding":"10px 18px"}),
+                    # Graph wrapped in constrained div to prevent depth log overflow
+                    html.Div(
+                        dcc.Graph(id="main-chart",
+                                  config={"displayModeBar":True,"scrollZoom":True}),
+                        style={"padding":"10px 18px","maxHeight":"600px","overflow":"hidden"},
+                        className="depthlog-graph-container",
+                        id="chart-wrapper",
+                    ),
+                    # FIX 5: Table with independent scroll using className
                     html.Div([
                         html.Div([
                             html.Span("DATA TABLE", style={"color":C["muted"],"fontSize":"10px","letterSpacing":"2px"}),
                             html.Span(id="row-count", style={"color":C["accent"],"fontSize":"11px","marginLeft":"12px"}),
+                            html.Span(" — values shown are measured per sample",
+                                      style={"color":C["muted"],"fontSize":"9px","marginLeft":"8px"}),
                         ], style={"marginBottom":"8px"}),
-                        html.Div(id="table-container"),
+                        # FIX 5: Wrap table in a div with fixed height and overflow scroll
+                        html.Div(id="table-container",
+                                 className="iodp-table-scroll"),
                     ], style={**CARD,"margin":"0 18px 18px 18px"}),
                 ], style={"flex":"1","overflowY":"auto","minWidth":"0"}),
             ], style={"display":"flex","flex":"1","overflow":"hidden"}),
@@ -1086,7 +1018,6 @@ def render_tab(tab):
         return html.Div([
             post_sidebar,
             html.Div([
-                # Status cards
                 html.Div([
                     html.Div(id="pe-status-a",
                         style={"flex":"1","background":C["panel"],"border":f"1px solid {C['border']}",
@@ -1102,22 +1033,28 @@ def render_tab(tab):
                                "color":C["muted"]}),
                 ], style={"display":"flex","marginBottom":"12px"}),
 
-                # Expedition filter
+                # FIX 4: Filter panel — clearer label and instructions
                 html.Div([
                     html.Div([
-                        html.Span("EXPEDITIONS IN DATASETS",
-                                  style={"color":C["muted"],"fontSize":"10px","letterSpacing":"2px"}),
+                        html.Span("FILTER BY EXPEDITION",
+                                  style={"color":C["text"],"fontSize":"11px","letterSpacing":"1px",
+                                         "fontWeight":"600"}),
+                        html.Span(" — check/uncheck to show only those expeditions in the chart and table",
+                                  style={"color":C["muted"],"fontSize":"10px","marginLeft":"6px"}),
                         html.Button("All / None", id="pe-exp-all-none", n_clicks=0,
                             style={"backgroundColor":C["border"],"color":C["text"],"border":"none",
                                    "borderRadius":"4px","padding":"3px 10px","cursor":"pointer",
                                    "fontSize":"10px","marginLeft":"12px"}),
-                    ], style={"marginBottom":"8px"}),
+                    ], style={"marginBottom":"8px","display":"flex","alignItems":"center","flexWrap":"wrap"}),
+                    html.Div(id="pe-exp-filter-hint",
+                             children="No expedition column detected in data yet.",
+                             style={"color":C["muted"],"fontSize":"10px","fontStyle":"italic",
+                                    "display":"none"}),
                     dcc.Checklist(id="pe-exp-filter", options=[], value=[],
                         labelStyle={"display":"inline-block","margin":"3px 8px 3px 0",
                                     "color":C["muted"],"fontSize":"11px"}),
                 ], style={**CARD,"marginBottom":"12px"}),
 
-                # Merged expeditions + download
                 html.Div([
                     html.Span("Expeditions in merged data: ",
                               style={"color":C["muted"],"fontSize":"11px","marginRight":"6px"}),
@@ -1132,26 +1069,17 @@ def render_tab(tab):
                 ], style={"marginBottom":"12px"}),
 
                 dcc.Graph(id="pe-chart", config={"displayModeBar":True,"scrollZoom":True}),
-                html.Div(id="pe-table-container", style={"marginTop":"16px"}),
+                # FIX 5: Post-expedition table also gets independent scroll
+                html.Div(id="pe-table-container",
+                         className="iodp-table-scroll",
+                         style={"marginTop":"16px","maxHeight":"320px","overflowY":"auto"}),
             ], style={"flex":"1","overflowY":"auto","padding":"16px","minWidth":"0"}),
         ], style={"display":"flex","flex":"1","overflow":"hidden"})
-
 
 
 # =============================================================================
 # CALLBACKS
 # =============================================================================
-# Callbacks are Python functions that run automatically when a component changes.
-# Each callback declares:
-#   Output  -- which component property to update
-#   Input   -- which component change triggers this function
-#   State   -- additional values to read without triggering (like form fields)
-#
-# =============================================================================
-# THEME CALLBACKS
-# =============================================================================
-# clientside_callback runs as JavaScript in the browser (no server round-trip).
-# This makes the theme switch instant rather than waiting for a server response.
 app.clientside_callback(
     """
     function(n, stored) {
@@ -1171,7 +1099,6 @@ app.clientside_callback(
         const vars = theme === "light" ? light : dark;
         const root = document.documentElement;
         Object.entries(vars).forEach(([k, v]) => root.style.setProperty(k, v));
-        // Also update body background directly for full coverage
         document.body.style.backgroundColor = vars["--bg"];
         document.body.style.color = vars["--text"];
         return theme;
@@ -1188,7 +1115,6 @@ app.clientside_callback(
     Input("theme-store", "data"),
 )
 def update_toggle_btn(theme):
-    """Update the toggle button label and border color to match the active theme."""
     if theme == "light":
         return "🌙 Dark mode", {
             "backgroundColor": "transparent",
@@ -1213,7 +1139,6 @@ def update_toggle_btn(theme):
     Input("upload","contents"), State("upload","filename"),
 )
 def load_file(contents, filename):
-    """Parse the uploaded data file and store it. Triggers all downstream callbacks."""
     if not contents: return None, {}, {}
     df, meta = parse_upload(contents, filename)
     if "error" in meta: return None, meta, {}
@@ -1224,7 +1149,6 @@ def load_file(contents, filename):
     Input("upload-litho","contents"), State("upload-litho","filename"),
 )
 def load_litho(contents, filename):
-    """Parse the optional lithology file and validate its required columns."""
     if not contents:
         return None, html.Div("No litho file loaded.", style={"color":C["muted"],"fontSize":"10px"})
     df_litho, meta = parse_upload(contents, filename)
@@ -1249,6 +1173,8 @@ def load_litho(contents, filename):
                          "fontSize":"10px","color":C["accent2"],"fontFamily":FONT}),
         html.Span(f"{n_units} units · {depth_range}",
                   style={"color":C["muted"],"fontSize":"10px","fontFamily":FONT,"marginLeft":"6px"}),
+        html.Div("Litho track will appear in Depth Log view.",
+                 style={"color":C["accent3"],"fontSize":"9px","marginTop":"3px","fontFamily":FONT}),
     ])
 
 @app.callback(
@@ -1272,7 +1198,6 @@ def update_meta_banner(site_info, expedition, site_hole, lat, lon, water_depth, 
     Input("store-meta","data"),
 )
 def set_options(meta):
-    """Populate axis dropdowns and curve checklist from the uploaded file columns."""
     if not meta or "columns" not in meta: return [],[],[],[]
     cols = meta["columns"]; num = meta["numeric_cols"]
     col_opts   = [{"label":c,"value":c} for c in cols]
@@ -1286,7 +1211,6 @@ def set_options(meta):
     Input("store-meta","data"), prevent_initial_call=True,
 )
 def set_defaults(meta):
-    """Auto-select sensible default axis values when a new file is loaded."""
     if not meta or "columns" not in meta: return None,None,"None",[]
     cols = meta["columns"]; num = meta["numeric_cols"]
     x_val = cols[0] if cols else None
@@ -1302,9 +1226,6 @@ def set_defaults(meta):
     Input("chart-type","value"),
 )
 def toggle_controls(ctype):
-    """Show or hide sidebar controls based on the selected chart type.
-    The depth log mode shows curve checkboxes; scatter mode shows x/y dropdowns.
-    """
     show=dict(LBL); hide=dict(LBL,display="none")
     show_dd=dict(DD); hide_dd=dict(DD,display="none")
     if ctype in ("histogram","heatmap"):
@@ -1318,7 +1239,6 @@ def toggle_controls(ctype):
 @app.callback(Output("kpi-bar","children"),
               Input("store-df","data"), Input("store-meta","data"))
 def update_kpis(jdf, meta):
-    """Build the row of summary statistic cards shown above the chart."""
     if not jdf:
         return [html.Span("Upload a file to begin.",style={"color":C["muted"],"fontSize":"12px"})]
     df = j2df(jdf); cards = []
@@ -1338,17 +1258,21 @@ def update_kpis(jdf, meta):
     Input("chart-type","value"), Input("x-col","value"),
     Input("y-col","value"), Input("color-col","value"),
     Input("depth-curves","value"), Input("overlay-opts","value"),
+    Input("axis-opts","value"),
 )
-def update_chart(jdf, jlitho, ctype, x, y, color, curves, overlays):
-    """Rebuild the main chart whenever any axis, chart type, or overlay option changes."""
+def update_chart(jdf, jlitho, ctype, x, y, color, curves, overlays, axis_opts):
+    """Rebuild chart on any control change. FIX 2: passes invert_y from axis-opts."""
     if not jdf: return empty_fig()
-    overlays = overlays or []
+    overlays  = overlays  or []
+    axis_opts = axis_opts or []
+    invert_y  = "invert_y" in axis_opts
     try:
         return make_chart(j2df(jdf), ctype, x, y, color, curves or [],
                           litho_df=j2df(jlitho) if jlitho else None,
                           show_gaps=("gaps" in overlays),
                           show_qc=("qc" in overlays),
-                          show_core_tops=("core_tops" in overlays))
+                          show_core_tops=("core_tops" in overlays),
+                          invert_y=invert_y)
     except Exception as e:
         return empty_fig("Error: "+str(e), C["danger"])
 
@@ -1357,7 +1281,7 @@ def update_chart(jdf, jlitho, ctype, x, y, color, curves, overlays):
     Input("store-df","data"),
 )
 def update_table(jdf):
-    """Render a paginated, sortable, filterable preview of the data table."""
+    """FIX 5: Table rendered inside the iodp-table-scroll div for independent scrolling."""
     if not jdf:
         return html.Div("No data loaded.",style={"color":C["muted"]}), ""
     df = j2df(jdf); preview = df.head(200)
@@ -1365,7 +1289,7 @@ def update_table(jdf):
         data=preview.to_dict("records"),
         columns=[{"name":c,"id":c} for c in preview.columns],
         page_size=10, sort_action="native", filter_action="native",
-        style_table={"overflowX":"auto"},
+        style_table={"overflowX":"auto","minWidth":"100%"},
         style_header={"backgroundColor":C["bg"],"color":C["accent"],
                       "fontWeight":"700","fontSize":"10px","border":f"1px solid {C['border']}"},
         style_cell={"backgroundColor":C["panel"],"color":C["text"],"fontSize":"11px",
@@ -1376,6 +1300,7 @@ def update_table(jdf):
             *[{"if":{"filter_query":f'{{{col}}} != ""',"column_id":col},"color":C["warn"]}
               for col in preview.columns if re.search(r"comment",col,re.IGNORECASE)],
         ],
+        fixed_rows={"headers": True},
     )
     return tbl, f"showing first 200 of {len(df):,} rows"
 
@@ -1395,14 +1320,12 @@ for _ds in ["a","b"]:
         pg  = {}  if src=="pangaea" else {"display":"none"}
         return up, lm, pg
 
-# ── Post-Expedition: upload load ──────────────────────────────────────────────
 @app.callback(
     Output("pe-store-a","data"), Output("pe-a-upload-status","children"),
     Input("pe-a-upload","contents"), State("pe-a-upload","filename"),
     prevent_initial_call=True,
 )
 def pe_load_a_upload(contents, filename):
-    """Parse a locally uploaded file for Dataset A."""
     df, meta = parse_upload(contents, filename)
     if "error" in meta: return None, f"Error: {meta['error']}"
     return df2j(df), f"✓ {filename}  ({len(df):,} rows)"
@@ -1413,12 +1336,10 @@ def pe_load_a_upload(contents, filename):
     prevent_initial_call=True,
 )
 def pe_load_b_upload(contents, filename):
-    """Parse a locally uploaded file for Dataset B."""
     df, meta = parse_upload(contents, filename)
     if "error" in meta: return None, f"Error: {meta['error']}"
     return df2j(df), f"✓ {filename}  ({len(df):,} rows)"
 
-# ── Post-Expedition: LIMS fetch ───────────────────────────────────────────────
 @app.callback(
     Output("pe-store-a","data",allow_duplicate=True),
     Output("pe-a-lims-status","children"),
@@ -1428,7 +1349,6 @@ def pe_load_b_upload(contents, filename):
     prevent_initial_call=True,
 )
 def pe_lims_a(n, report, exp, site, hole):
-    """Fetch Dataset A from the LIMS/LORE database."""
     if not n or not report or not exp: return None, "Select report and expedition"
     df, err = fetch_lore(report, exp, site or "", hole or "")
     if err: return None, f"LIMS error: {err[:80]}"
@@ -1443,13 +1363,11 @@ def pe_lims_a(n, report, exp, site, hole):
     prevent_initial_call=True,
 )
 def pe_lims_b(n, report, exp, site, hole):
-    """Fetch Dataset B from the LIMS/LORE database."""
     if not n or not report or not exp: return None, "Select report and expedition"
     df, err = fetch_lore(report, exp, site or "", hole or "")
     if err: return None, f"LIMS error: {err[:80]}"
     return df2j(df), f"✓ LIMS {LORE_REPORTS.get(report,report)} Exp {exp}  ({len(df):,} rows)"
 
-# ── Post-Expedition: PANGAEA fetch ────────────────────────────────────────────
 @app.callback(
     Output("pe-store-a","data",allow_duplicate=True),
     Output("pe-a-pangaea-status","children"),
@@ -1458,7 +1376,6 @@ def pe_lims_b(n, report, exp, site, hole):
     prevent_initial_call=True,
 )
 def pe_pangaea_a(n, pid):
-    """Fetch Dataset A from PANGAEA by numeric dataset ID."""
     if not n or not pid: return None, "Enter a PANGAEA dataset ID"
     df, err = fetch_pangaea_doi(pid.strip())
     if err: return None, f"PANGAEA error: {err[:80]}"
@@ -1472,13 +1389,11 @@ def pe_pangaea_a(n, pid):
     prevent_initial_call=True,
 )
 def pe_pangaea_b(n, pid):
-    """Fetch Dataset B from PANGAEA by numeric dataset ID."""
     if not n or not pid: return None, "Enter a PANGAEA dataset ID"
     df, err = fetch_pangaea_doi(pid.strip())
     if err: return None, f"PANGAEA error: {err[:80]}"
     return df2j(df), f"✓ PANGAEA {pid}  ({len(df):,} rows)"
 
-# ── Post-Expedition: PANGAEA search ──────────────────────────────────────────
 @app.callback(
     Output("pe-a-pangaea-results","children"),
     Input("pe-search-a-pangaea","n_clicks"),
@@ -1486,7 +1401,6 @@ def pe_pangaea_b(n, pid):
     prevent_initial_call=True,
 )
 def pe_pangaea_search_a(n, query):
-    """Search PANGAEA and display results so the user can copy an ID for Dataset A."""
     if not n or not query: return ""
     results, err = search_pangaea(query)
     if err: return html.Div(f"Search error: {err[:60]}", style={"color":C["danger"],"fontSize":"10px"})
@@ -1508,7 +1422,6 @@ def pe_pangaea_search_a(n, query):
     prevent_initial_call=True,
 )
 def pe_pangaea_search_b(n, query):
-    """Search PANGAEA and display results so the user can copy an ID for Dataset B."""
     if not n or not query: return ""
     results, err = search_pangaea(query)
     if err: return html.Div(f"Search error: {err[:60]}", style={"color":C["danger"],"fontSize":"10px"})
@@ -1523,14 +1436,12 @@ def pe_pangaea_search_b(n, query):
           }) for r in results[:8]]
     ])
 
-# ── Post-Expedition: depth col dropdowns ─────────────────────────────────────
 @app.callback(
     Output("pe-depth-a","options"), Output("pe-depth-a","value"),
     Output("pe-depth-b","options"), Output("pe-depth-b","value"),
     Input("pe-store-a","data"), Input("pe-store-b","data"),
 )
 def pe_depth_opts(da, db):
-    """Populate depth column dropdowns from the columns available in each dataset."""
     def ov(d):
         if not d: return [],None
         df = j2df(d)
@@ -1538,13 +1449,11 @@ def pe_depth_opts(da, db):
     oa,va = ov(da); ob,vb = ov(db)
     return oa,va,ob,vb
 
-# ── Post-Expedition: status cards ─────────────────────────────────────────────
 @app.callback(
     Output("pe-status-a","children"), Output("pe-status-b","children"),
     Input("pe-store-a","data"), Input("pe-store-b","data"),
 )
 def pe_status_cards(da, db):
-    """Update the status cards showing row/column counts for each loaded dataset."""
     def card(d, label, color):
         if not d: return [html.Span(f"{label}: ",style={"color":color}), "no data loaded"]
         df = j2df(d)
@@ -1552,13 +1461,11 @@ def pe_status_cards(da, db):
                 html.Span(f"{len(df):,} rows x {len(df.columns)} cols")]
     return card(da,"Dataset A",C["accent"]), card(db,"Dataset B",C["accent3"])
 
-# ── Post-Expedition: expedition filter ───────────────────────────────────────
 @app.callback(
     Output("pe-exp-filter","options"), Output("pe-exp-filter","value"),
     Input("pe-store-a","data"), Input("pe-store-b","data"), Input("pe-merged-store","data"),
 )
 def pe_exp_opts(da, db, dm):
-    """Populate expedition filter checkboxes from any expedition column in the data."""
     exps = set()
     for d in [da,db,dm]:
         if d:
@@ -1573,11 +1480,9 @@ def pe_exp_opts(da, db, dm):
     prevent_initial_call=True,
 )
 def pe_exp_toggle(n, opts, current):
-    """Toggle all expedition checkboxes on or off with the All/None button."""
     all_vals = [o["value"] for o in opts]
     return [] if set(current)==set(all_vals) else all_vals
 
-# ── Post-Expedition: merge ────────────────────────────────────────────────────
 @app.callback(
     Output("pe-merged-store","data"), Output("pe-status-merged","children"),
     Input("pe-merge-btn","n_clicks"),
@@ -1602,14 +1507,12 @@ def pe_merge(n, da, db, dca, dcb, tol):
     except Exception as e:
         return None, f"Merge error: {str(e)[:80]}"
 
-# ── Post-Expedition: axis dropdowns ──────────────────────────────────────────
 @app.callback(
     Output("pe-xaxis","options"), Output("pe-yaxis","options"),
     Output("pe-ycols-b","options"),
     Input("pe-merged-store","data"),
 )
 def pe_axis_opts(dm):
-    """Populate axis dropdowns from the merged dataset columns."""
     if not dm: return [],[],[]
     df = j2df(dm)
     opts = [{"label":c,"value":c} for c in df.columns]
@@ -1624,39 +1527,31 @@ def pe_axis_defaults(opts):
     if not opts: return None, None, None
     cols = [o["value"] for o in opts]
     depth = next((c for c in cols if "depth" in c.lower()), cols[0])
-    # Split cols into _A suffix (dataset A) and _B suffix (dataset B)
     a_cols = [c for c in cols if c.endswith("_A") and c != depth]
     b_cols = [c for c in cols if c.endswith("_B") and c != depth]
-    # Fall back to first few non-depth cols if no suffix pattern
     others = [c for c in cols if c not in (depth,"depth_key")]
     y_a = a_cols[:3] if a_cols else others[:2]
     y_b = b_cols[:3] if b_cols else others[2:4]
     return depth, y_a, y_b
 
-# ── Post-Expedition: merged expeditions readout ───────────────────────────────
 @app.callback(
     Output("pe-merged-expeditions","children"),
     Input("pe-merged-store","data"), Input("pe-exp-filter","value"),
 )
 def pe_merged_exp_readout(dm, selected):
-    """Show which expedition numbers are in the currently filtered merged data."""
     if not dm: return "n/a"
     df = j2df(dm)
     exps = get_expeditions_from_df(df)
     filtered = [e for e in exps if e in (selected or [])]
     return ", ".join(filtered) if filtered else "n/a"
 
-
-# ── Post-Expedition: show rolling window control only in rolling mode ─────────
 @app.callback(
     Output("pe-rolling-ctrl","style"),
     Input("pe-chart-mode","value"),
 )
 def pe_rolling_toggle(mode):
-    """Show the rolling window size control only when rolling mean mode is active."""
     return {} if mode == "rolling" else {"display":"none"}
 
-# ── Post-Expedition: chart ────────────────────────────────────────────────────
 @app.callback(
     Output("pe-chart","figure"),
     Input("pe-merged-store","data"), Input("pe-exp-filter","value"),
@@ -1685,7 +1580,6 @@ def pe_chart(dm, selected, xcol, ycols_a, ycols_b, mode, rwin):
     cfg_base.pop("xaxis", None); cfg_base.pop("yaxis", None)
     axis_kw  = dict(gridcolor=C["border"], linecolor=C["border"])
 
-    # ── MODE 1: Depth tracks — independent x-axis per column ─────────────────
     if mode == "tracks":
         n_cols = len(all_cols)
         fig = make_subplots(rows=1, cols=n_cols, shared_yaxes=True,
@@ -1701,119 +1595,89 @@ def pe_chart(dm, selected, xcol, ycols_a, ycols_b, mode, rwin):
             ), row=1, col=i + 1)
             fig.update_xaxes(title_text=yc, title_font=dict(size=10),
                              **axis_kw, row=1, col=i + 1)
-        fig.update_yaxes(title_text=xcol + " (mbsf)", autorange="reversed",
-                         **axis_kw)
+        fig.update_yaxes(title_text=xcol + " (mbsf)", autorange="reversed", **axis_kw)
         fig.update_layout(showlegend=False, **cfg_base)
         return fig
 
-    # ── MODE 2: Correlation scatter — col_a vs col_b, colored by depth ──────
     if mode == "scatter":
         if not ycols_a or not ycols_b:
             return empty_fig("Select at least one column from each dataset")
         xa = ycols_a[0]; xb = ycols_b[0]
         sub = df[[xcol, xa, xb]].dropna()
         fig = go.Figure(go.Scatter(
-            x=sub[xa], y=sub[xb],
-            mode="markers",
-            marker=dict(
-                color=sub[xcol],
-                colorscale="Viridis_r",
-                size=5, opacity=0.75,
-                colorbar=dict(title=xcol + " mbsf",
-                              tickfont=dict(color=C["muted"]),
-                              titlefont=dict(color=C["muted"])),
-                showscale=True,
-            ),
+            x=sub[xa], y=sub[xb], mode="markers",
+            marker=dict(color=sub[xcol], colorscale="Viridis_r", size=5, opacity=0.75,
+                        colorbar=dict(title=xcol + " mbsf",
+                                      tickfont=dict(color=C["muted"]),
+                                      titlefont=dict(color=C["muted"])),
+                        showscale=True),
             hovertemplate=f"{xa}: %{{x:.3g}}<br>{xb}: %{{y:.3g}}<br>depth: %{{marker.color:.1f}} mbsf<extra></extra>",
         ))
-        # regression line
         try:
             m, b = np.polyfit(sub[xa].values, sub[xb].values, 1)
             x_r = np.linspace(sub[xa].min(), sub[xa].max(), 200)
             r = np.corrcoef(sub[xa].values, sub[xb].values)[0, 1]
-            fig.add_trace(go.Scatter(
-                x=x_r, y=m * x_r + b, mode="lines", name=f"r={r:.3f}",
-                line=dict(color=C["danger"], width=1.5, dash="dash"),
-            ))
+            fig.add_trace(go.Scatter(x=x_r, y=m*x_r+b, mode="lines",
+                                     name=f"r={r:.3f}",
+                                     line=dict(color=C["danger"], width=1.5, dash="dash")))
         except Exception:
             pass
-        fig.update_layout(**{**PLOT_CFG, "height": 600},
-                          xaxis=dict(title=xa, **axis_kw),
-                          yaxis=dict(title=xb, **axis_kw),
-                          showlegend=True)
+        fig.update_layout(**{**PLOT_CFG,"height":600},
+                          xaxis=dict(title=xa,**axis_kw),
+                          yaxis=dict(title=xb,**axis_kw), showlegend=True)
         return fig
 
-    # ── MODE 3: Dual-axis overlay — two y-scales, shared depth axis ──────────
     if mode == "dual":
         if not ycols_a or not ycols_b:
             return empty_fig("Select at least one column from each dataset")
         ya = ycols_a[0]; yb = ycols_b[0]
         fig = go.Figure()
-        sub_a = df[[xcol, ya]].dropna()
-        sub_b = df[[xcol, yb]].dropna()
-        fig.add_trace(go.Scatter(
-            x=sub_a[xcol], y=sub_a[ya], mode="lines", name=ya,
-            line=dict(color=C["accent"], width=1.5), yaxis="y1",
-        ))
-        fig.add_trace(go.Scatter(
-            x=sub_b[xcol], y=sub_b[yb], mode="lines", name=yb,
-            line=dict(color=C["accent3"], width=1.5, dash="dot"), yaxis="y2",
-        ))
-        layout = {**PLOT_CFG, "height": 600,
-            "xaxis":  dict(title=xcol + " (mbsf)", **axis_kw),
-            "yaxis":  dict(title=ya, color=C["accent"], **axis_kw),
-            "yaxis2": dict(title=yb, color=C["accent3"],
-                           overlaying="y", side="right",
+        sub_a = df[[xcol,ya]].dropna(); sub_b = df[[xcol,yb]].dropna()
+        fig.add_trace(go.Scatter(x=sub_a[xcol], y=sub_a[ya], mode="lines", name=ya,
+                                 line=dict(color=C["accent"],width=1.5), yaxis="y1"))
+        fig.add_trace(go.Scatter(x=sub_b[xcol], y=sub_b[yb], mode="lines", name=yb,
+                                 line=dict(color=C["accent3"],width=1.5,dash="dot"), yaxis="y2"))
+        layout = {**PLOT_CFG,"height":600,
+            "xaxis": dict(title=xcol+" (mbsf)",**axis_kw),
+            "yaxis": dict(title=ya, color=C["accent"],**axis_kw),
+            "yaxis2": dict(title=yb, color=C["accent3"], overlaying="y", side="right",
                            gridcolor="rgba(0,0,0,0)", linecolor=C["border"]),
-            "showlegend": True,
-            "legend": dict(bgcolor=C["panel"], bordercolor=C["border"], borderwidth=1),
+            "showlegend":True,
+            "legend":dict(bgcolor=C["panel"],bordercolor=C["border"],borderwidth=1),
         }
         fig.update_layout(**layout)
         return fig
 
-    # ── MODE 4: Rolling mean comparison ───────────────────────────────────────
     if mode == "rolling":
         window = max(2, int(rwin or 20))
         n_cols = len(all_cols)
-        fig = make_subplots(rows=1, cols=n_cols, shared_yaxes=True,
-                            horizontal_spacing=0.03)
+        fig = make_subplots(rows=1, cols=n_cols, shared_yaxes=True, horizontal_spacing=0.03)
         for i, (yc, color) in enumerate(
             [(c, colors_a[j % len(colors_a)]) for j, c in enumerate(ycols_a)] +
             [(c, colors_b[j % len(colors_b)]) for j, c in enumerate(ycols_b)]
         ):
-            sub = df[[xcol, yc]].dropna()
-            rolled = sub[yc].rolling(window, center=True, min_periods=1).mean()
-            # raw (faint)
-            fig.add_trace(go.Scatter(
-                x=sub[yc], y=sub[xcol], mode="lines", name=yc + " (raw)",
-                line=dict(color=color, width=0.6), opacity=0.35,
-                showlegend=False,
-            ), row=1, col=i + 1)
-            # smoothed (bold)
-            fig.add_trace(go.Scatter(
-                x=rolled, y=sub[xcol], mode="lines",
-                name=f"{yc}  (n={window})",
-                line=dict(color=color, width=2.5),
-            ), row=1, col=i + 1)
-            fig.update_xaxes(title_text=yc, title_font=dict(size=10),
-                             **axis_kw, row=1, col=i + 1)
-        fig.update_yaxes(title_text=xcol + " (mbsf)", autorange="reversed",
-                         **axis_kw)
+            sub = df[[xcol,yc]].dropna()
+            rolled = sub[yc].rolling(window,center=True,min_periods=1).mean()
+            fig.add_trace(go.Scatter(x=sub[yc],y=sub[xcol],mode="lines",
+                                     name=yc+" (raw)", line=dict(color=color,width=0.6),
+                                     opacity=0.35, showlegend=False), row=1,col=i+1)
+            fig.add_trace(go.Scatter(x=rolled,y=sub[xcol],mode="lines",
+                                     name=f"{yc}  (n={window})",
+                                     line=dict(color=color,width=2.5)), row=1,col=i+1)
+            fig.update_xaxes(title_text=yc,title_font=dict(size=10),**axis_kw,row=1,col=i+1)
+        fig.update_yaxes(title_text=xcol+" (mbsf)",autorange="reversed",**axis_kw)
         fig.update_layout(showlegend=True,
-                          legend=dict(bgcolor=C["panel"], bordercolor=C["border"],
-                                      borderwidth=1, font=dict(size=10)),
-                          **cfg_base)
+                          legend=dict(bgcolor=C["panel"],bordercolor=C["border"],
+                                      borderwidth=1,font=dict(size=10)), **cfg_base)
         return fig
 
     return empty_fig("Select a chart mode")
 
-# ── Post-Expedition: table ────────────────────────────────────────────────────
 @app.callback(
     Output("pe-table-container","children"),
     Input("pe-merged-store","data"), Input("pe-exp-filter","value"),
 )
 def pe_table(dm, selected):
-    """Render a preview table of the merged data, filtered by selected expeditions."""
     if not dm: return ""
     df = j2df(dm)
     exp_col = next((c for c in df.columns if "expedition" in c.lower()),None)
@@ -1824,16 +1688,16 @@ def pe_table(dm, selected):
         data=preview.to_dict("records"),
         columns=[{"name":c,"id":c} for c in preview.columns],
         page_size=10, sort_action="native", filter_action="native",
-        style_table={"overflowX":"auto"},
+        style_table={"overflowX":"auto","minWidth":"100%"},
         style_header={"backgroundColor":C["bg"],"color":C["accent"],
                       "fontWeight":"700","fontSize":"10px","border":f"1px solid {C['border']}"},
         style_cell={"backgroundColor":C["panel"],"color":C["text"],"fontSize":"11px",
                     "padding":"7px 11px","border":f"1px solid {C['border']}",
                     "fontFamily":FONT,"maxWidth":"160px","overflow":"hidden","textOverflow":"ellipsis"},
         style_data_conditional=[{"if":{"row_index":"odd"},"backgroundColor":C["bg"]}],
+        fixed_rows={"headers": True},
     )
 
-# ── Post-Expedition: download ─────────────────────────────────────────────────
 @app.callback(
     Output("pe-download","data"),
     Input("pe-download-btn","n_clicks"),
@@ -1841,7 +1705,6 @@ def pe_table(dm, selected):
     prevent_initial_call=True,
 )
 def pe_download(n, dm, selected):
-    """Trigger a CSV file download of the merged dataset when the button is clicked."""
     if not dm: return None
     df = j2df(dm)
     exp_col = next((c for c in df.columns if "expedition" in c.lower()),None)
@@ -1852,7 +1715,5 @@ def pe_download(n, dm, selected):
 # =============================================================================
 # ENTRY POINT
 # =============================================================================
-# This block only runs when you execute the file directly: python app.py
-# It does not run when gunicorn or another server imports the file.
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=7860, debug=False)
