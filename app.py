@@ -710,8 +710,9 @@ shipboard_sidebar = html.Div([
             html.Div("Drop file or click to upload"),
             html.Div("Accepted: .csv  .tsv  .xlsx  .las",
                      style={"color":C["muted"],"fontSize":"10px","marginTop":"3px"}),
-        ], style={"width":"260px","minWidth":"260px","background":C["panel"],
-          "borderRight":f"1px solid {C['border']}","padding":"18px","overflowY":"auto"}),
+        ], style={"textAlign":"center","color":C["text"],"fontSize":"12px"}),
+        style={"border":f"2px dashed {C['border']}","borderRadius":"8px",
+               "padding":"16px","cursor":"pointer","marginBottom":"10px"}),
 
     # FIX 7: Clarify litho upload purpose — it layers on top, doesn't replace main data
     html.P("LITHO TRACK (optional, layers on chart)", style=LBL),
@@ -793,8 +794,7 @@ shipboard_sidebar = html.Div([
                     "color":C["text"],"fontSize":"12px","fontFamily":FONT},
         inputStyle={"marginRight":"7px","accentColor":C["accent"]}),
 ], style={"width":"240px","minWidth":"240px","background":C["panel"],
-          "borderRight":f"1px solid {C['border']}","padding":"18px",
-          "overflowY":"auto","height":"100%"})
+          "borderRight":f"1px solid {C['border']}","padding":"18px"})
 
 
 # ── Post-Expedition dataset fetch panel ──────────────────────────────────────
@@ -971,7 +971,7 @@ app.layout = html.Div([
     dcc.Store(id="pe-merged-store"),
 
 ], style={"minHeight":"100vh","display":"flex","flexDirection":"column",
-          "background":C["bg"],"color":C["text"],"fontFamily":FONT})})
+          "background":C["bg"],"color":C["text"],"fontFamily":FONT})
 
 # =============================================================================
 # TAB ROUTING
@@ -1007,9 +1007,9 @@ def render_tab(tab):
                         html.Div(id="table-container",
                                  className="iodp-table-scroll"),
                     ], style={**CARD,"margin":"0 18px 18px 18px"}),
-                ], style={"flex":"1","overflowY":"auto","minWidth":"0"}),
-            ], style={"display":"flex","flex":"1","overflow":"hidden"}),
-        ], style={"display":"flex","flexDirection":"column","flex":"1","overflow":"hidden"})
+                ], style={"flex":"1","minWidth":"320px"}),
+            ], style={"display":"flex","flexWrap":"wrap","flex":"1"}),
+        ], style={"display":"flex","flexDirection":"column","flex":"1"})
 
     else:
         return html.Div([
@@ -1068,8 +1068,8 @@ def render_tab(tab):
                 html.Div(id="pe-table-container",
                          className="iodp-table-scroll",
                          style={"marginTop":"16px","maxHeight":"320px","overflowY":"auto"}),
-            ], style={"flex":"1","overflowY":"auto","padding":"16px","minWidth":"0"}),
-        ], style={"display":"flex","flex":"1","overflow":"hidden"})
+            ], style={"flex":"1","padding":"16px","minWidth":"320px"}),
+        ], style={"display":"flex","flexWrap":"wrap","flex":"1"})
 
 
 # =============================================================================
