@@ -90,8 +90,6 @@ HEADER_KEYWORDS = [
 ]
 
 # =============================================================================
-# FIX 1: LIMS CSV HEADER DETECTION
-# =============================================================================
 # LIMS CSV exports have metadata rows like:
 #   "Exp","Site","Hole","Core","Type","Sect","A/W","Offset (cm)","Depth CSF-A (m)",...
 # The actual column header is identifiable by LIMS-specific keywords.
@@ -643,6 +641,11 @@ app.index_string = """<!DOCTYPE html>
     --text:#e6edf3; --muted:#8b949e; --danger:#f85149; --warn:#d29922;
     --dd-bg:#21262d; --dd-hover:#30363d;
   }
+  html, body, #react-entry-point {
+    height: auto !important;
+    min-height: 100%;
+    overflow-y: auto !important;
+  }
   body { background:var(--bg) !important; color:var(--text) !important; }
   .Select-menu-outer,.VirtualizedSelectOption,.Select-option
     { background-color:var(--dd-bg)!important; color:var(--text)!important; }
@@ -679,8 +682,7 @@ app.index_string = """<!DOCTYPE html>
 
   /* FIX 8: Depth log layout — prevent the chart from pushing controls off screen */
   .depthlog-graph-container {
-    max-height: 600px;
-    overflow: hidden;
+    overflow: visible;
   }
 </style>
 </head>
@@ -708,9 +710,8 @@ shipboard_sidebar = html.Div([
             html.Div("Drop file or click to upload"),
             html.Div("Accepted: .csv  .tsv  .xlsx  .las",
                      style={"color":C["muted"],"fontSize":"10px","marginTop":"3px"}),
-        ], style={"textAlign":"center","color":C["text"],"fontSize":"12px"}),
-        style={"border":f"2px dashed {C['border']}","borderRadius":"8px",
-               "padding":"16px","cursor":"pointer","marginBottom":"10px"}),
+        ], style={"width":"260px","minWidth":"260px","background":C["panel"],
+          "borderRight":f"1px solid {C['border']}","padding":"18px","overflowY":"auto"}),
 
     # FIX 7: Clarify litho upload purpose — it layers on top, doesn't replace main data
     html.P("LITHO TRACK (optional, layers on chart)", style=LBL),
@@ -926,7 +927,7 @@ post_sidebar = html.Div([
                   min=2, max=500, style=INP),
     ]),
 ], style={"width":"260px","minWidth":"260px","background":C["panel"],
-          "borderRight":f"1px solid {C['border']}","padding":"18px","overflowY":"auto"})
+          "borderRight":f"1px solid {C['border']}","padding":"18px"})
 
 # =============================================================================
 # APP LAYOUT
@@ -969,8 +970,8 @@ app.layout = html.Div([
     dcc.Store(id="pe-store-b"),
     dcc.Store(id="pe-merged-store"),
 
-], style={"height":"100vh","display":"flex","flexDirection":"column",
-          "background":C["bg"],"color":C["text"],"overflow":"hidden","fontFamily":FONT})
+], style={"minHeight":"100vh","display":"flex","flexDirection":"column",
+          "background":C["bg"],"color":C["text"],"fontFamily":FONT})})
 
 # =============================================================================
 # TAB ROUTING
@@ -985,20 +986,17 @@ def render_tab(tab):
                                 "padding":"10px 20px","fontFamily":FONT})),
             html.Div([
                 shipboard_sidebar,
-                # FIX 8: Main content area scrolls independently from sidebar
                 html.Div([
                     html.Div(id="kpi-bar",
                              style={"display":"flex","gap":"10px","padding":"10px 18px",
                                     "borderBottom":f"1px solid {C['border']}","flexWrap":"wrap"}),
                     # Graph wrapped in constrained div to prevent depth log overflow
-                    html.Div(
+                   html.Div(
                         dcc.Graph(id="main-chart",
                                   config={"displayModeBar":True,"scrollZoom":True}),
-                        style={"padding":"10px 18px","maxHeight":"600px","overflow":"hidden"},
-                        className="depthlog-graph-container",
+                        style={"padding":"10px 18px"},
                         id="chart-wrapper",
                     ),
-                    # FIX 5: Table with independent scroll using className
                     html.Div([
                         html.Div([
                             html.Span("DATA TABLE", style={"color":C["muted"],"fontSize":"10px","letterSpacing":"2px"}),
@@ -1006,7 +1004,6 @@ def render_tab(tab):
                             html.Span(" — values shown are measured per sample",
                                       style={"color":C["muted"],"fontSize":"9px","marginLeft":"8px"}),
                         ], style={"marginBottom":"8px"}),
-                        # FIX 5: Wrap table in a div with fixed height and overflow scroll
                         html.Div(id="table-container",
                                  className="iodp-table-scroll"),
                     ], style={**CARD,"margin":"0 18px 18px 18px"}),
@@ -1032,8 +1029,6 @@ def render_tab(tab):
                                "borderRadius":"6px","padding":"10px 14px","fontSize":"12px",
                                "color":C["muted"]}),
                 ], style={"display":"flex","marginBottom":"12px"}),
-
-                # FIX 4: Filter panel — clearer label and instructions
                 html.Div([
                     html.Div([
                         html.Span("FILTER BY EXPEDITION",
