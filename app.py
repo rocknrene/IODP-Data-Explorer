@@ -15,7 +15,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 
-from dash import Dash, dcc, html, Input, Output, State, dash_table
+from dash import Dash, dcc, html, Input, Output, State, dash_table, ctx, ALL
 import flask
 
 # =============================================================================
@@ -474,6 +474,42 @@ def search_pangaea(query, count=10):
     except Exception as e:
         return [], str(e)
 
+def search_pangaea_legacy(leg, project="DSDP", count=15):
+    """Search PANGAEA for legacy DSDP/ODP shipboard datasets tied to a Leg number.
+    Mirrors the filters PANGAEA's own web search uses, e.g.:
+      DSDP: pangaea.de/?q=...&f.campaign[]=Leg5&f.project[]=DSDP
+      ODP:  pangaea.de/?q=...&f.campaign[]=Leg118&f.author[]=Shipboard+Scientific+Party
+    Used by the Database auto-detect flow as a fallback once LIMS/LORE (JR
+    expeditions, 317+) comes up empty — DSDP and ODP predate LIMS/LORE and
+    live on PANGAEA instead."""
+    campaign_label = f"Leg{str(leg).strip()}"
+    must = [{"match": {"campaign.label": campaign_label}}]
+    if project == "DSDP":
+        must.append({"match": {"project.label": "DSDP"}})
+    else:  # ODP shipboard party datasets
+        must.append({"match": {"author.fullname": "Shipboard Scientific Party"}})
+    body = {
+        "query": {"bool": {"must": must}},
+        "size": count,
+        "_source": ["title", "URI"],
+    }
+    try:
+        r = requests.post(PANGAEA_ES, json=body, timeout=20,
+                          headers={"Content-Type": "application/json"})
+        r.raise_for_status()
+        hits = r.json().get("hits", {}).get("hits", [])
+        results = []
+        for h in hits:
+            src   = h.get("_source", {})
+            uri   = src.get("URI", "")
+            pid   = uri.split(".")[-1] if uri else h.get("_id", "")
+            title = src.get("title", uri)
+            if pid:
+                results.append({"label": f"{pid} — {str(title)[:60]}", "value": pid})
+        return results, None
+    except Exception as e:
+        return [], str(e)
+
 def find_depth_col(df):
     for c in df.columns:
         if any(k in c.lower() for k in ["depth","mbsf","mcsf","top_depth"]):
@@ -802,21 +838,15 @@ def dataset_panel(ds):
     accent = C["accent"] if ds == "a" else C["accent3"]
     label  = "DATASET A" if ds == "a" else "DATASET B"
     repo_hint = html.Div([
+        html.Div("Enter a Leg/Expedition number — no need to know which archive it "
+                 "lives in. Database mode checks LIMS/LORE first (JR expeditions, "
+                 "317+), then falls back to PANGAEA (DSDP, ODP, and MSP expeditions).",
+                 style={"color":C["muted"],"fontSize":"9px","lineHeight":"1.4"}),
         html.Div([
-            html.Span("LIMS/LORE", style={"color":C["accent2"],"fontWeight":"700"}),
-            html.Span(" — JR expeditions 317+  (GCR/TAMU)",
-                      style={"color":C["muted"]}),
-        ], style={"fontSize":"9px","marginBottom":"2px","fontFamily":FONT}),
-        html.Div([
-            html.Span("PANGAEA", style={"color":C["accent3"],"fontWeight":"700"}),
-            html.Span(" — MSP expeditions  (BCR/Bremen, ESO/ECORD)",
-                      style={"color":C["muted"]}),
-        ], style={"fontSize":"9px","marginBottom":"2px","fontFamily":FONT}),
-        html.Div([
-            html.Span("Upload", style={"color":C["accent"],"fontWeight":"700"}),
-            html.Span(" — Chikyu/J-CORES (KCC/JAMSTEC) or any local file",
-                      style={"color":C["muted"]}),
-        ], style={"fontSize":"9px","fontFamily":FONT}),
+            html.Span("Note: ", style={"color":C["accent"],"fontWeight":"700"}),
+            html.Span("Chikyu/J-CORES data (KCC/JAMSTEC) has no public API — use "
+                      "Local file upload for those expeditions.", style={"color":C["muted"]}),
+        ], style={"fontSize":"9px","marginTop":"4px","fontFamily":FONT}),
     ], style={"background":C["bg"],"border":f"1px solid {C['border']}",
               "borderRadius":"4px","padding":"6px 8px","marginBottom":"8px"})
 
@@ -825,16 +855,15 @@ def dataset_panel(ds):
         repo_hint,
         dcc.RadioItems(id=f"pe-{ds}-source",
             options=[
-                {"label": " Upload / J-CORES", "value": "upload"},
-                {"label": " LIMS/LORE",         "value": "lims"},
-                {"label": " PANGAEA",            "value": "pangaea"},
+                {"label": " Database",           "value": "database"},
+                {"label": " Local file upload",  "value": "upload"},
             ],
-            value="upload",
+            value="database",
             labelStyle={"display":"block","color":C["muted"],
                         "fontSize":"11px","marginBottom":"3px"},
             inputStyle={"marginRight":"6px","accentColor":accent},
         ),
-        html.Div(id=f"pe-{ds}-upload-panel", children=[
+        html.Div(id=f"pe-{ds}-upload-panel", style={"display":"none"}, children=[
             dcc.Upload(id=f"pe-{ds}-upload", multiple=False,
                 children=html.Div([
                     html.Div("Drop file or click to upload",
@@ -847,40 +876,22 @@ def dataset_panel(ds):
             html.Div(id=f"pe-{ds}-upload-status",
                      style={"fontSize":"10px","color":C["accent2"],"marginTop":"4px"}),
         ]),
-        html.Div(id=f"pe-{ds}-lims-panel", style={"display":"none"}, children=[
-            html.P("Report type", style={**LBL,"marginTop":"6px"}),
+        html.Div(id=f"pe-{ds}-database-panel", children=[
+            dcc.Input(id=f"pe-{ds}-lims-exp",  placeholder="Leg/Expedition (e.g. 344 or 118)",
+                      style={**INP,"marginTop":"6px"}),
+            dcc.Input(id=f"pe-{ds}-lims-site", placeholder="Site (e.g. U1381) — optional",
+                      style={**INP,"marginTop":"4px"}),
+            dcc.Input(id=f"pe-{ds}-lims-hole", placeholder="Hole (e.g. C) — optional",
+                      style={**INP,"marginTop":"4px"}),
+            html.P("Report type (used if this leg is in LIMS/LORE)", style={**LBL,"marginTop":"6px"}),
             dcc.Dropdown(id=f"pe-{ds}-report",
                 options=[{"label":v,"value":k} for k,v in LORE_REPORTS.items()],
                 placeholder="select report...", style=DD),
-            dcc.Input(id=f"pe-{ds}-lims-exp",  placeholder="Expedition (e.g. 344)",
-                      style={**INP,"marginTop":"4px"}),
-            dcc.Input(id=f"pe-{ds}-lims-site", placeholder="Site (e.g. U1381)",
-                      style={**INP,"marginTop":"4px"}),
-            dcc.Input(id=f"pe-{ds}-lims-hole", placeholder="Hole (e.g. C)",
-                      style={**INP,"marginTop":"4px"}),
-            html.Button(f"Fetch {ds.upper()} from LIMS", id=f"pe-fetch-{ds}-lims",
-                        n_clicks=0, style=BTN(C["accent2"])),
-            html.Div(id=f"pe-{ds}-lims-status",
+            html.Button(f"Fetch {ds.upper()}", id=f"pe-fetch-{ds}-database",
+                        n_clicks=0, style=BTN(accent)),
+            html.Div(id=f"pe-{ds}-db-status",
                      style={"fontSize":"10px","color":C["accent2"],"marginTop":"4px"}),
-        ]),
-        html.Div(id=f"pe-{ds}-pangaea-panel", style={"display":"none"}, children=[
-            html.P("PANGAEA dataset ID", style={**LBL,"marginTop":"6px"}),
-            html.Div("Enter the numeric ID from the DOI (e.g. 938129 from 10.1594/PANGAEA.938129)",
-                     style={"color":C["muted"],"fontSize":"9px","marginBottom":"4px"}),
-            dcc.Input(id=f"pe-{ds}-pangaea-id", placeholder="e.g. 938129",
-                      style={**INP,"marginTop":"4px"}),
-            html.Button(f"Fetch {ds.upper()} from PANGAEA", id=f"pe-fetch-{ds}-pangaea",
-                        n_clicks=0, style=BTN(C["accent3"])),
-            html.Hr(style={"borderColor":C["border"],"margin":"8px 0"}),
-            html.P("Or search PANGAEA", style={**LBL,"marginTop":"0"}),
-            dcc.Input(id=f"pe-{ds}-pangaea-query",
-                      placeholder="e.g. IODP 386 physical properties",
-                      style={**INP,"marginTop":"4px"}),
-            html.Button("Search", id=f"pe-search-{ds}-pangaea",
-                        n_clicks=0, style=BTN(C["border"])),
-            html.Div(id=f"pe-{ds}-pangaea-results", style={"marginTop":"6px"}),
-            html.Div(id=f"pe-{ds}-pangaea-status",
-                     style={"fontSize":"10px","color":C["accent2"],"marginTop":"4px"}),
+            html.Div(id=f"pe-{ds}-db-results", style={"marginTop":"6px"}),
         ]),
     ], style={"borderBottom":f"1px solid {C['border']}",
               "paddingBottom":"12px","marginBottom":"12px"})
@@ -893,6 +904,19 @@ post_sidebar = html.Div([
              style={"color":C["muted"],"fontSize":"9px","marginBottom":"12px"}),
     dataset_panel("a"),
     dataset_panel("b"),
+    html.P("VIEW MODE", style={**LBL,"marginTop":"0"}),
+    html.Div("Explore a single dataset on its own, or merge A + B by depth first.",
+             style={"color":C["muted"],"fontSize":"9px","marginBottom":"6px"}),
+    dcc.RadioItems(id="pe-view-mode", value="merged",
+        options=[
+            {"label": " Merged (A + B)",   "value": "merged"},
+            {"label": " Dataset A only",   "value": "a"},
+            {"label": " Dataset B only",   "value": "b"},
+        ],
+        labelStyle={"display":"block","marginBottom":"6px",
+                    "color":C["text"],"fontSize":"11px","fontFamily":FONT},
+        inputStyle={"marginRight":"6px","accentColor":C["accent"]}),
+    html.Hr(style={"borderColor":C["border"],"margin":"10px 0"}),
     html.P("MERGE SETTINGS", style={**LBL,"marginTop":"0"}),
     html.Div("Depth tolerance (cm)", style={"color":C["muted"],"fontSize":"10px","marginBottom":"4px"}),
     dcc.Input(id="pe-tolerance", value="2", type="number", min=0, max=500, style=INP),
@@ -917,10 +941,12 @@ post_sidebar = html.Div([
     ),
     html.P("DEPTH COLUMN", style=LBL),
     dcc.Dropdown(id="pe-xaxis", options=[], value=None, style=DD),
-    html.P("DATASET A  columns", style=LBL),
+    html.P("DATASET A  columns", id="pe-yaxis-lbl", style=LBL),
     dcc.Dropdown(id="pe-yaxis", options=[], value=None, multi=True, style=DD),
-    html.P("DATASET B  columns", style=LBL),
-    dcc.Dropdown(id="pe-ycols-b", options=[], value=None, multi=True, style=DD),
+    html.Div(id="pe-ycols-b-container", children=[
+        html.P("DATASET B  columns", style=LBL),
+        dcc.Dropdown(id="pe-ycols-b", options=[], value=None, multi=True, style=DD),
+    ]),
     html.Div(id="pe-rolling-ctrl", style={"display":"none"}, children=[
         html.P("Rolling window (rows)", style={**LBL,"marginTop":"8px"}),
         dcc.Input(id="pe-rolling-window", value="20", type="number",
@@ -969,6 +995,7 @@ app.layout = html.Div([
     dcc.Store(id="pe-store-a"),
     dcc.Store(id="pe-store-b"),
     dcc.Store(id="pe-merged-store"),
+    dcc.Store(id="pe-active-store"),
 
 ], style={"minHeight":"100vh","display":"flex","flexDirection":"column",
           "background":C["bg"],"color":C["text"],"fontFamily":FONT})
@@ -1051,11 +1078,11 @@ def render_tab(tab):
                 ], style={**CARD,"marginBottom":"12px"}),
 
                 html.Div([
-                    html.Span("Expeditions in merged data: ",
+                    html.Span("Expeditions in view: ",
                               style={"color":C["muted"],"fontSize":"11px","marginRight":"6px"}),
                     html.Span(id="pe-merged-expeditions",
                               style={"color":C["accent2"],"fontSize":"11px","fontFamily":FONT}),
-                    html.Button("Download merged CSV", id="pe-download-btn", n_clicks=0,
+                    html.Button("Download CSV", id="pe-download-btn", n_clicks=0,
                         style={"backgroundColor":C["panel"],"color":C["accent"],
                                "border":f"1px solid {C['border']}","borderRadius":"4px",
                                "padding":"4px 12px","cursor":"pointer",
@@ -1305,15 +1332,13 @@ def update_table(jdf):
 for _ds in ["a","b"]:
     @app.callback(
         Output(f"pe-{_ds}-upload-panel","style"),
-        Output(f"pe-{_ds}-lims-panel","style"),
-        Output(f"pe-{_ds}-pangaea-panel","style"),
+        Output(f"pe-{_ds}-database-panel","style"),
         Input(f"pe-{_ds}-source","value"),
     )
     def pe_toggle(src, ds=_ds):
-        up  = {}  if src=="upload"  else {"display":"none"}
-        lm  = {}  if src=="lims"    else {"display":"none"}
-        pg  = {}  if src=="pangaea" else {"display":"none"}
-        return up, lm, pg
+        up = {}  if src=="upload"   else {"display":"none"}
+        db = {}  if src=="database" else {"display":"none"}
+        return up, db
 
 @app.callback(
     Output("pe-store-a","data"), Output("pe-a-upload-status","children"),
@@ -1335,101 +1360,80 @@ def pe_load_b_upload(contents, filename):
     if "error" in meta: return None, f"Error: {meta['error']}"
     return df2j(df), f"✓ {filename}  ({len(df):,} rows)"
 
-@app.callback(
-    Output("pe-store-a","data",allow_duplicate=True),
-    Output("pe-a-lims-status","children"),
-    Input("pe-fetch-a-lims","n_clicks"),
-    State("pe-a-report","value"), State("pe-a-lims-exp","value"),
-    State("pe-a-lims-site","value"), State("pe-a-lims-hole","value"),
-    prevent_initial_call=True,
-)
-def pe_lims_a(n, report, exp, site, hole):
-    if not n or not report or not exp: return None, "Select report and expedition"
-    df, err = fetch_lore(report, exp, site or "", hole or "")
-    if err: return None, f"LIMS error: {err[:80]}"
-    return df2j(df), f"✓ LIMS {LORE_REPORTS.get(report,report)} Exp {exp}  ({len(df):,} rows)"
-
-@app.callback(
-    Output("pe-store-b","data",allow_duplicate=True),
-    Output("pe-b-lims-status","children"),
-    Input("pe-fetch-b-lims","n_clicks"),
-    State("pe-b-report","value"), State("pe-b-lims-exp","value"),
-    State("pe-b-lims-site","value"), State("pe-b-lims-hole","value"),
-    prevent_initial_call=True,
-)
-def pe_lims_b(n, report, exp, site, hole):
-    if not n or not report or not exp: return None, "Select report and expedition"
-    df, err = fetch_lore(report, exp, site or "", hole or "")
-    if err: return None, f"LIMS error: {err[:80]}"
-    return df2j(df), f"✓ LIMS {LORE_REPORTS.get(report,report)} Exp {exp}  ({len(df):,} rows)"
-
-@app.callback(
-    Output("pe-store-a","data",allow_duplicate=True),
-    Output("pe-a-pangaea-status","children"),
-    Input("pe-fetch-a-pangaea","n_clicks"),
-    State("pe-a-pangaea-id","value"),
-    prevent_initial_call=True,
-)
-def pe_pangaea_a(n, pid):
-    if not n or not pid: return None, "Enter a PANGAEA dataset ID"
-    df, err = fetch_pangaea_doi(pid.strip())
-    if err: return None, f"PANGAEA error: {err[:80]}"
-    return df2j(df), f"✓ PANGAEA {pid}  ({len(df):,} rows)"
-
-@app.callback(
-    Output("pe-store-b","data",allow_duplicate=True),
-    Output("pe-b-pangaea-status","children"),
-    Input("pe-fetch-b-pangaea","n_clicks"),
-    State("pe-b-pangaea-id","value"),
-    prevent_initial_call=True,
-)
-def pe_pangaea_b(n, pid):
-    if not n or not pid: return None, "Enter a PANGAEA dataset ID"
-    df, err = fetch_pangaea_doi(pid.strip())
-    if err: return None, f"PANGAEA error: {err[:80]}"
-    return df2j(df), f"✓ PANGAEA {pid}  ({len(df):,} rows)"
-
-@app.callback(
-    Output("pe-a-pangaea-results","children"),
-    Input("pe-search-a-pangaea","n_clicks"),
-    State("pe-a-pangaea-query","value"),
-    prevent_initial_call=True,
-)
-def pe_pangaea_search_a(n, query):
-    if not n or not query: return ""
-    results, err = search_pangaea(query)
-    if err: return html.Div(f"Search error: {err[:60]}", style={"color":C["danger"],"fontSize":"10px"})
-    if not results: return html.Div("No results.", style={"color":C["muted"],"fontSize":"10px"})
+def _pangaea_pick_list(ds, results):
+    """Clickable list of PANGAEA matches — each button fetches that dataset."""
     return html.Div([
-        html.Div("Click an ID to copy it into the field above:",
+        html.Div("Pick a match to load it:",
                  style={"color":C["muted"],"fontSize":"9px","marginBottom":"4px"}),
-        *[html.Div(r["label"], style={
-            "fontSize":"10px","color":C["accent3"],"cursor":"pointer",
-            "padding":"3px 0","borderBottom":f"1px solid {C['border']}",
-            "fontFamily":FONT,
-          }) for r in results[:8]]
+        *[html.Button(r["label"],
+            id={"type":"pe-db-pick", "ds":ds, "pid":r["value"]},
+            n_clicks=0,
+            style={"display":"block","width":"100%","textAlign":"left",
+                   "background":"none","border":"none",
+                   "borderBottom":f"1px solid {C['border']}",
+                   "color":C["accent3"],"cursor":"pointer",
+                   "fontSize":"10px","padding":"4px 0","fontFamily":FONT})
+          for r in results[:8]]
     ])
 
-@app.callback(
-    Output("pe-b-pangaea-results","children"),
-    Input("pe-search-b-pangaea","n_clicks"),
-    State("pe-b-pangaea-query","value"),
-    prevent_initial_call=True,
-)
-def pe_pangaea_search_b(n, query):
-    if not n or not query: return ""
-    results, err = search_pangaea(query)
-    if err: return html.Div(f"Search error: {err[:60]}", style={"color":C["danger"],"fontSize":"10px"})
-    if not results: return html.Div("No results.", style={"color":C["muted"],"fontSize":"10px"})
-    return html.Div([
-        html.Div("Click an ID to copy it into the field above:",
-                 style={"color":C["muted"],"fontSize":"9px","marginBottom":"4px"}),
-        *[html.Div(r["label"], style={
-            "fontSize":"10px","color":C["accent3"],"cursor":"pointer",
-            "padding":"3px 0","borderBottom":f"1px solid {C['border']}",
-            "fontFamily":FONT,
-          }) for r in results[:8]]
-    ])
+for _ds in ["a","b"]:
+    @app.callback(
+        Output(f"pe-store-{_ds}","data",allow_duplicate=True),
+        Output(f"pe-{_ds}-db-status","children"),
+        Output(f"pe-{_ds}-db-results","children"),
+        Input(f"pe-fetch-{_ds}-database","n_clicks"),
+        State(f"pe-{_ds}-report","value"), State(f"pe-{_ds}-lims-exp","value"),
+        State(f"pe-{_ds}-lims-site","value"), State(f"pe-{_ds}-lims-hole","value"),
+        prevent_initial_call=True,
+    )
+    def pe_database_fetch(n, report, exp, site, hole, ds=_ds):
+        if not n or not exp:
+            return None, "Enter a Leg/Expedition number", ""
+        exp = str(exp).strip()
+
+        # 1) try LIMS/LORE first (JR expeditions, 317+) if a report type was picked
+        if report:
+            df, err = fetch_lore(report, exp, site or "", hole or "")
+            if not err and df is not None and not df.empty:
+                status = f"✓ LIMS/LORE  {LORE_REPORTS.get(report,report)}  Leg {exp}  ({len(df):,} rows)"
+                return df2j(df), status, ""
+
+        # 2) fall back to PANGAEA — try DSDP, then ODP shipboard-party datasets
+        for project in ("DSDP", "ODP"):
+            results, err = search_pangaea_legacy(exp, project)
+            if err:
+                continue
+            if not results:
+                continue
+            if len(results) == 1:
+                pid = results[0]["value"]
+                df, ferr = fetch_pangaea_doi(pid)
+                if not ferr and df is not None and not df.empty:
+                    status = f"✓ PANGAEA {project}  {pid}  Leg {exp}  ({len(df):,} rows)"
+                    return df2j(df), status, ""
+            status = (f"Not found in LIMS/LORE — {len(results)} PANGAEA {project} "
+                      f"match(es) for Leg {exp}:")
+            return None, status, _pangaea_pick_list(ds, results)
+
+        return (None,
+                f"No data found in LIMS/LORE or PANGAEA for Leg {exp}. Try Local file upload.",
+                "")
+
+    @app.callback(
+        Output(f"pe-store-{_ds}","data",allow_duplicate=True),
+        Output(f"pe-{_ds}-db-status","children",allow_duplicate=True),
+        Input({"type":"pe-db-pick","ds":_ds,"pid":ALL},"n_clicks"),
+        prevent_initial_call=True,
+    )
+    def pe_database_pick(n_clicks_list, ds=_ds):
+        trig = ctx.triggered_id
+        if not trig or not any(n_clicks_list):
+            return None, ""
+        pid = trig["pid"]
+        df, err = fetch_pangaea_doi(pid)
+        if err:
+            return None, f"PANGAEA error: {err[:80]}"
+        return df2j(df), f"✓ PANGAEA {pid}  ({len(df):,} rows)"
 
 @app.callback(
     Output("pe-depth-a","options"), Output("pe-depth-a","value"),
@@ -1503,39 +1507,66 @@ def pe_merge(n, da, db, dca, dcb, tol):
         return None, f"Merge error: {str(e)[:80]}"
 
 @app.callback(
+    Output("pe-active-store","data"),
+    Input("pe-view-mode","value"),
+    Input("pe-merged-store","data"), Input("pe-store-a","data"), Input("pe-store-b","data"),
+)
+def pe_active_data(mode, dm, da, db):
+    """Idea 3 — lets a user explore Dataset A or B alone, without merging first."""
+    if mode == "a": return da
+    if mode == "b": return db
+    return dm
+
+@app.callback(
+    Output("pe-ycols-b-container","style"), Output("pe-yaxis-lbl","children"),
+    Input("pe-view-mode","value"),
+)
+def pe_view_mode_ui(mode):
+    if mode == "merged":
+        return {}, "DATASET A  columns"
+    label = "DATASET A  columns" if mode == "a" else "DATASET B  columns"
+    return {"display":"none"}, label
+
+@app.callback(
     Output("pe-xaxis","options"), Output("pe-yaxis","options"),
     Output("pe-ycols-b","options"),
-    Input("pe-merged-store","data"),
+    Input("pe-active-store","data"),
 )
-def pe_axis_opts(dm):
-    if not dm: return [],[],[]
-    df = j2df(dm)
+def pe_axis_opts(da):
+    if not da: return [],[],[]
+    df = j2df(da)
     opts = [{"label":c,"value":c} for c in df.columns]
     return opts, opts, opts
 
 @app.callback(
     Output("pe-xaxis","value"), Output("pe-yaxis","value"),
     Output("pe-ycols-b","value"),
-    Input("pe-xaxis","options"), prevent_initial_call=True,
+    Input("pe-xaxis","options"), State("pe-view-mode","value"),
+    prevent_initial_call=True,
 )
-def pe_axis_defaults(opts):
+def pe_axis_defaults(opts, mode):
     if not opts: return None, None, None
     cols = [o["value"] for o in opts]
     depth = next((c for c in cols if "depth" in c.lower()), cols[0])
-    a_cols = [c for c in cols if c.endswith("_A") and c != depth]
-    b_cols = [c for c in cols if c.endswith("_B") and c != depth]
     others = [c for c in cols if c not in (depth,"depth_key")]
-    y_a = a_cols[:3] if a_cols else others[:2]
-    y_b = b_cols[:3] if b_cols else others[2:4]
+    if mode == "merged":
+        a_cols = [c for c in cols if c.endswith("_A") and c != depth]
+        b_cols = [c for c in cols if c.endswith("_B") and c != depth]
+        y_a = a_cols[:3] if a_cols else others[:2]
+        y_b = b_cols[:3] if b_cols else others[2:4]
+    else:
+        # single-dataset view — Dataset B column selector is hidden, keep it empty
+        y_a = others[:3]
+        y_b = []
     return depth, y_a, y_b
 
 @app.callback(
     Output("pe-merged-expeditions","children"),
-    Input("pe-merged-store","data"), Input("pe-exp-filter","value"),
+    Input("pe-active-store","data"), Input("pe-exp-filter","value"),
 )
-def pe_merged_exp_readout(dm, selected):
-    if not dm: return "n/a"
-    df = j2df(dm)
+def pe_merged_exp_readout(da, selected):
+    if not da: return "n/a"
+    df = j2df(da)
     exps = get_expeditions_from_df(df)
     filtered = [e for e in exps if e in (selected or [])]
     return ", ".join(filtered) if filtered else "n/a"
@@ -1549,14 +1580,14 @@ def pe_rolling_toggle(mode):
 
 @app.callback(
     Output("pe-chart","figure"),
-    Input("pe-merged-store","data"), Input("pe-exp-filter","value"),
+    Input("pe-active-store","data"), Input("pe-exp-filter","value"),
     Input("pe-xaxis","value"), Input("pe-yaxis","value"),
     Input("pe-ycols-b","value"), Input("pe-chart-mode","value"),
     Input("pe-rolling-window","value"),
 )
-def pe_chart(dm, selected, xcol, ycols_a, ycols_b, mode, rwin):
-    if not dm or not xcol: return empty_fig("Merge two datasets to visualize")
-    df = j2df(dm)
+def pe_chart(da, selected, xcol, ycols_a, ycols_b, mode, rwin):
+    if not da or not xcol: return empty_fig("Load a dataset (or merge A + B) to visualize")
+    df = j2df(da)
     exp_col = next((c for c in df.columns if "expedition" in c.lower()), None)
     if exp_col and selected:
         df = df[df[exp_col].astype(str).isin(selected)]
@@ -1670,11 +1701,11 @@ def pe_chart(dm, selected, xcol, ycols_a, ycols_b, mode, rwin):
 
 @app.callback(
     Output("pe-table-container","children"),
-    Input("pe-merged-store","data"), Input("pe-exp-filter","value"),
+    Input("pe-active-store","data"), Input("pe-exp-filter","value"),
 )
-def pe_table(dm, selected):
-    if not dm: return ""
-    df = j2df(dm)
+def pe_table(da, selected):
+    if not da: return ""
+    df = j2df(da)
     exp_col = next((c for c in df.columns if "expedition" in c.lower()),None)
     if exp_col and selected:
         df = df[df[exp_col].astype(str).isin(selected)]
@@ -1696,16 +1727,16 @@ def pe_table(dm, selected):
 @app.callback(
     Output("pe-download","data"),
     Input("pe-download-btn","n_clicks"),
-    State("pe-merged-store","data"), State("pe-exp-filter","value"),
+    State("pe-active-store","data"), State("pe-exp-filter","value"),
     prevent_initial_call=True,
 )
-def pe_download(n, dm, selected):
-    if not dm: return None
-    df = j2df(dm)
+def pe_download(n, da, selected):
+    if not da: return None
+    df = j2df(da)
     exp_col = next((c for c in df.columns if "expedition" in c.lower()),None)
     if exp_col and selected:
         df = df[df[exp_col].astype(str).isin(selected)]
-    return dcc.send_data_frame(df.to_csv, "iodp_merged.csv", index=False)
+    return dcc.send_data_frame(df.to_csv, "iodp_export.csv", index=False)
 
 # =============================================================================
 # ENTRY POINT
