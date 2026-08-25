@@ -418,6 +418,35 @@ def find_recovery_gaps(df, depth_col, gap_threshold_m=5.0):
 # =============================================================================
 # ONLINE DATA FETCH HELPERS
 # =============================================================================
+def _find_col(df, keys):
+    """Find the first column whose header matches one of the given keywords
+    (case-insensitive, prefix match — e.g. 'exp' matches 'Exp' or 'Expedition')."""
+    for c in df.columns:
+        cl = c.lower().strip()
+        if any(cl == k or cl.startswith(k) for k in keys):
+            return c
+    return None
+
+def _restrict_to_request(df, expedition, site, hole):
+    """LORE's filters aren't guaranteed to actually restrict the report — an
+    unrecognized site/hole value can come back as an unfiltered (or only
+    partially filtered) result instead of zero rows. Re-check the returned
+    rows against what was actually requested so a typo'd or nonexistent
+    site/hole doesn't get reported as a clean, on-target fetch."""
+    exp_col = _find_col(df, ["exp"])
+    if exp_col is not None and expedition:
+        df = df[df[exp_col].astype(str).str.strip().str.lower()
+                 == str(expedition).strip().lower()]
+    site_col = _find_col(df, ["site"])
+    if site_col is not None and site:
+        df = df[df[site_col].astype(str).str.strip().str.lower()
+                 == str(site).strip().lower()]
+    hole_col = _find_col(df, ["hole"])
+    if hole_col is not None and hole:
+        df = df[df[hole_col].astype(str).str.strip().str.lower()
+                 == str(hole).strip().lower()]
+    return df
+
 def fetch_lore(report_name, expedition, site="", hole=""):
     filters = [f"x_expedition in ('{expedition}')"]
     if site: filters.append(f"x_site in ('{site}')")
@@ -428,9 +457,26 @@ def fetch_lore(report_name, expedition, site="", hole=""):
     try:
         r = requests.get(url, timeout=30)
         r.raise_for_status()
-        df = pd.read_csv(io.StringIO(r.text))
+        text = r.text
+        df = pd.read_csv(io.StringIO(text))
         if df.empty:
             return None, "No data returned — check expedition/site/report combination"
+        if len(df.columns) < 3:
+            # Real LIMS/LORE physical-property exports carry several id/depth
+            # columns (Exp, Site, Hole, Core, ... Depth, plus the measurement
+            # itself). A single- or two-column result usually means the
+            # response wasn't a real CSV at all — e.g. an HTML error or
+            # login page that pandas still parsed as one text column —
+            # not that the report legitimately has that little data.
+            snippet = text.strip().splitlines()[0][:120] if text.strip() else "(empty response)"
+            return None, f"Unexpected response ({len(df.columns)} column) — got: {snippet}"
+        n_raw = len(df)
+        df = _restrict_to_request(df, expedition, site, hole)
+        if df.empty:
+            requested = ", ".join(f"{k}={v}" for k, v in
+                                   [("expedition",expedition),("site",site),("hole",hole)] if v)
+            return None, (f"LORE returned {n_raw:,} rows but none matched {requested} — "
+                          f"check that this site/hole exists for this expedition")
         return df, None
     except Exception as e:
         return None, str(e)
@@ -878,15 +924,18 @@ def dataset_panel(ds):
         ]),
         html.Div(id=f"pe-{ds}-database-panel", children=[
             dcc.Input(id=f"pe-{ds}-lims-exp",  placeholder="Leg/Expedition (e.g. 344 or 118)",
-                      style={**INP,"marginTop":"6px"}),
-            dcc.Input(id=f"pe-{ds}-lims-site", placeholder="Site (e.g. U1381) — optional",
-                      style={**INP,"marginTop":"4px"}),
-            dcc.Input(id=f"pe-{ds}-lims-hole", placeholder="Hole (e.g. C) — optional",
-                      style={**INP,"marginTop":"4px"}),
+                      debounce=True, style={**INP,"marginTop":"6px"}),
             html.P("Report type (used if this leg is in LIMS/LORE)", style={**LBL,"marginTop":"6px"}),
             dcc.Dropdown(id=f"pe-{ds}-report",
                 options=[{"label":v,"value":k} for k,v in LORE_REPORTS.items()],
                 placeholder="select report...", style=DD),
+            html.Div("Site and Hole populate below from what's actually in LIMS/LORE "
+                     "for this Leg + report — pick from the list, don't type a guess.",
+                     style={"color":C["muted"],"fontSize":"9px","marginTop":"6px","lineHeight":"1.4"}),
+            dcc.Dropdown(id=f"pe-{ds}-lims-site", placeholder="Site — optional (all sites if blank)",
+                         style={**DD,"marginTop":"4px"}),
+            dcc.Dropdown(id=f"pe-{ds}-lims-hole", placeholder="Hole — optional (all holes if blank)",
+                         style={**DD,"marginTop":"4px"}),
             html.Button(f"Fetch {ds.upper()}", id=f"pe-fetch-{ds}-database",
                         n_clicks=0, style=BTN(accent)),
             html.Div(id=f"pe-{ds}-db-status",
@@ -994,6 +1043,8 @@ app.layout = html.Div([
     dcc.Store(id="store-site-info", storage_type="session"),
     dcc.Store(id="pe-store-a"),
     dcc.Store(id="pe-store-b"),
+    dcc.Store(id="pe-a-lims-raw"),
+    dcc.Store(id="pe-b-lims-raw"),
     dcc.Store(id="pe-merged-store"),
     dcc.Store(id="pe-active-store"),
 
@@ -1378,27 +1429,87 @@ def _pangaea_pick_list(ds, results):
 
 for _ds in ["a","b"]:
     @app.callback(
-        Output(f"pe-store-{_ds}","data",allow_duplicate=True),
+        Output(f"pe-{_ds}-lims-raw","data"),
+        Output(f"pe-{_ds}-lims-site","options"), Output(f"pe-{_ds}-lims-site","value"),
+        Output(f"pe-{_ds}-lims-hole","options",allow_duplicate=True),
+        Output(f"pe-{_ds}-lims-hole","value",allow_duplicate=True),
         Output(f"pe-{_ds}-db-status","children"),
+        Input(f"pe-{_ds}-lims-exp","value"), Input(f"pe-{_ds}-report","value"),
+        prevent_initial_call=True,
+    )
+    def pe_lookup(exp, report, ds=_ds):
+        """Pulls the whole Leg's report once (no site/hole filter) so Site and
+        Hole can be offered as dropdowns built only from what's really there —
+        instead of free-typed values that may not exist for this Leg."""
+        if not exp or not report:
+            return None, [], None, [], None, ""
+        exp = str(exp).strip()
+        df, err = fetch_lore(report, exp, "", "")
+        if err:
+            return None, [], None, [], None, f"LIMS/LORE: {err[:100]}"
+        site_col = _find_col(df, ["site"])
+        sites = sorted(df[site_col].dropna().astype(str).unique().tolist()) if site_col else []
+        hole_col = _find_col(df, ["hole"])
+        holes = sorted(df[hole_col].dropna().astype(str).unique().tolist()) if hole_col else []
+        status = (f"Found {len(df):,} rows in LIMS/LORE for Leg {exp}"
+                  f"  ({len(sites)} site(s))" if sites else f"Found {len(df):,} rows in LIMS/LORE for Leg {exp}")
+        return (df2j(df),
+                [{"label":s,"value":s} for s in sites], None,
+                [{"label":h,"value":h} for h in holes], None,
+                status)
+
+    @app.callback(
+        Output(f"pe-{_ds}-lims-hole","options",allow_duplicate=True),
+        Output(f"pe-{_ds}-lims-hole","value",allow_duplicate=True),
+        Input(f"pe-{_ds}-lims-site","value"),
+        State(f"pe-{_ds}-lims-raw","data"),
+        prevent_initial_call=True,
+    )
+    def pe_hole_opts(site, raw, ds=_ds):
+        """Narrows the Hole dropdown to holes that actually exist for the
+        chosen Site, so an impossible Site+Hole combo can't be selected."""
+        if not raw:
+            return [], None
+        df = j2df(raw)
+        hole_col = _find_col(df, ["hole"])
+        if not hole_col:
+            return [], None
+        if site:
+            site_col = _find_col(df, ["site"])
+            if site_col:
+                df = df[df[site_col].astype(str) == str(site)]
+        holes = sorted(df[hole_col].dropna().astype(str).unique().tolist())
+        return [{"label":h,"value":h} for h in holes], None
+
+    @app.callback(
+        Output(f"pe-store-{_ds}","data",allow_duplicate=True),
+        Output(f"pe-{_ds}-db-status","children",allow_duplicate=True),
         Output(f"pe-{_ds}-db-results","children"),
         Input(f"pe-fetch-{_ds}-database","n_clicks"),
         State(f"pe-{_ds}-report","value"), State(f"pe-{_ds}-lims-exp","value"),
         State(f"pe-{_ds}-lims-site","value"), State(f"pe-{_ds}-lims-hole","value"),
+        State(f"pe-{_ds}-lims-raw","data"),
         prevent_initial_call=True,
     )
-    def pe_database_fetch(n, report, exp, site, hole, ds=_ds):
+    def pe_database_fetch(n, report, exp, site, hole, raw, ds=_ds):
         if not n or not exp:
             return None, "Enter a Leg/Expedition number", ""
         exp = str(exp).strip()
 
-        # 1) try LIMS/LORE first (JR expeditions, 317+) if a report type was picked
-        if report:
-            df, err = fetch_lore(report, exp, site or "", hole or "")
-            if not err and df is not None and not df.empty:
-                status = f"✓ LIMS/LORE  {LORE_REPORTS.get(report,report)}  Leg {exp}  ({len(df):,} rows)"
+        # 1) Leg + report already looked up in LIMS/LORE — filter the cached
+        #    raw fetch by whatever Site/Hole was picked (both real values,
+        #    since the dropdowns only ever offer what's actually in the data).
+        if raw:
+            df = j2df(raw)
+            df = _restrict_to_request(df, exp, site, hole)
+            if not df.empty:
+                picked = ", ".join(f"{k}={v}" for k, v in [("site",site),("hole",hole)] if v)
+                status = (f"✓ LIMS/LORE  {LORE_REPORTS.get(report,report)}  Leg {exp}"
+                          f"{'  ('+picked+')' if picked else ''}  ({len(df):,} rows)")
                 return df2j(df), status, ""
+            return None, f"No rows matched site={site or 'any'}, hole={hole or 'any'} for Leg {exp}", ""
 
-        # 2) fall back to PANGAEA — try DSDP, then ODP shipboard-party datasets
+        # 2) No LIMS/LORE data for this leg — fall back to PANGAEA (DSDP, then ODP)
         for project in ("DSDP", "ODP"):
             results, err = search_pangaea_legacy(exp, project)
             if err:
@@ -1512,7 +1623,8 @@ def pe_merge(n, da, db, dca, dcb, tol):
     Input("pe-merged-store","data"), Input("pe-store-a","data"), Input("pe-store-b","data"),
 )
 def pe_active_data(mode, dm, da, db):
-    """Idea 3 — lets a user explore Dataset A or B alone, without merging first."""
+    """Selects the dataframe to drive the chart/table/download — either
+    dataset on its own, or the merged result, per the View Mode setting."""
     if mode == "a": return da
     if mode == "b": return db
     return dm
