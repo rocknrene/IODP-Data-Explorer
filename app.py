@@ -16,7 +16,15 @@ import requests
 import numpy as np
 import pandas as pd
 import lasio
-from scipy import stats
+try:
+    from scipy import stats as scipy_stats
+    SCIPY_AVAILABLE = True
+except ImportError:
+    # scipy is optional — it only powers the p-value on the correlation
+    # scatter's trendline. A missing optional stats package should degrade
+    # that one feature, not prevent the whole app from booting.
+    scipy_stats = None
+    SCIPY_AVAILABLE = False
 
 import plotly.graph_objects as go
 import plotly.express as px
@@ -1969,13 +1977,18 @@ def pe_chart(da, selected, xcol, ycols_a, ycols_b, mode, rwin, theme="dark"):
         try:
             m, b = np.polyfit(sub[xa].values, sub[xb].values, 1)
             x_r = np.linspace(sub[xa].min(), sub[xa].max(), 200)
-            # Pearson r together with its own p-value and n, rather than a
-            # bare r — a correlation coefficient alone doesn't say whether
-            # it's likely real or an artifact of a small/scattered sample.
-            r, p = stats.pearsonr(sub[xa].values, sub[xb].values)
             n = len(sub)
-            sig = "significant" if p < 0.05 else "not significant"
-            label = f"r={r:.3f}  r²={r**2:.3f}  n={n}  p={p:.2g} ({sig} at α=0.05)"
+            if SCIPY_AVAILABLE:
+                # Pearson r together with its own p-value and n, rather than
+                # a bare r — a correlation coefficient alone doesn't say
+                # whether it's likely real or an artifact of a small/
+                # scattered sample.
+                r, p = scipy_stats.pearsonr(sub[xa].values, sub[xb].values)
+                sig = "significant" if p < 0.05 else "not significant"
+                label = f"r={r:.3f}  r²={r**2:.3f}  n={n}  p={p:.2g} ({sig} at α=0.05)"
+            else:
+                r = np.corrcoef(sub[xa].values, sub[xb].values)[0, 1]
+                label = f"r={r:.3f}  r²={r**2:.3f}  n={n}  (p-value needs scipy — not installed)"
             fig.add_trace(go.Scatter(x=x_r, y=m*x_r+b, mode="lines",
                                      name=label,
                                      line=dict(color=t["danger"], width=1.5, dash="dash")))
