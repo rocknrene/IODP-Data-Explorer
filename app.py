@@ -40,26 +40,34 @@ THEMES = {
 }
 C = THEMES["dark"]
 
-PLOT_CFG = dict(
-    paper_bgcolor=C["panel"], plot_bgcolor=C["bg"],
-    font=dict(color=C["text"], family="monospace"),
-    xaxis=dict(gridcolor=C["border"], zerolinecolor=C["border"]),
-    yaxis=dict(gridcolor=C["border"], zerolinecolor=C["border"]),
-    colorway=[C["accent"], C["accent2"], C["accent3"], "#bc8cff", "#ff7b72"],
-    margin=dict(l=55, r=20, t=40, b=50),
-)
-CARD = dict(background=C["panel"], border=f"1px solid {C['border']}",
+def plot_cfg(theme="dark"):
+    """Plotly figures are rendered as SVG and can't follow CSS variables the
+    way regular HTML elements can — Plotly needs a literal color string at
+    figure-build time. So charts get their palette by calling this with the
+    current theme (from theme-store) rather than via the CSS-var trick used
+    for the rest of the UI."""
+    t = THEMES.get(theme, THEMES["dark"])
+    return dict(
+        paper_bgcolor=t["panel"], plot_bgcolor=t["bg"],
+        font=dict(color=t["text"], family="monospace"),
+        xaxis=dict(gridcolor=t["border"], zerolinecolor=t["border"]),
+        yaxis=dict(gridcolor=t["border"], zerolinecolor=t["border"]),
+        colorway=[t["accent"], t["accent2"], t["accent3"], "#bc8cff", "#ff7b72"],
+        margin=dict(l=55, r=20, t=40, b=50),
+    )
+PLOT_CFG = plot_cfg("dark")  # default/back-compat for any stray direct references
+CARD = dict(background="var(--panel)", border=f"1px solid var(--border)",
             borderRadius="8px", padding="14px")
 FONT = "monospace"
-DD   = {"background": C["panel"], "color": C["text"],
-        "border": f"1px solid {C['border']}", "borderRadius": "4px"}
-LBL  = {"color": C["muted"], "fontSize": "10px", "letterSpacing": "2px",
+DD   = {"background": "var(--panel)", "color": "var(--text)",
+        "border": f"1px solid var(--border)", "borderRadius": "4px"}
+LBL  = {"color": "var(--muted)", "fontSize": "10px", "letterSpacing": "2px",
         "marginBottom": "4px", "marginTop": "12px", "fontFamily": FONT}
-INP  = {"width": "100%", "background": C["bg"], "color": C["text"],
-        "border": f"1px solid {C['border']}", "borderRadius": "4px",
+INP  = {"width": "100%", "background": "var(--bg)", "color": "var(--text)",
+        "border": f"1px solid var(--border)", "borderRadius": "4px",
         "padding": "4px 8px", "fontSize": "11px", "fontFamily": FONT,
         "boxSizing": "border-box"}
-BTN  = lambda bg: {"backgroundColor": bg, "color": C["bg"], "border": "none",
+BTN  = lambda bg: {"backgroundColor": bg, "color": "var(--bg)", "border": "none",
                    "borderRadius": "4px", "padding": "6px 12px", "cursor": "pointer",
                    "fontSize": "11px", "marginTop": "6px", "width": "100%",
                    "fontWeight": "700"}
@@ -240,11 +248,12 @@ def df2j(df):
 def j2df(j):
     return pd.read_json(io.StringIO(j), orient="split") if j else None
 
-def empty_fig(msg="Upload a file to begin", color=None):
+def empty_fig(msg="Upload a file to begin", color=None, theme="dark"):
+    t = THEMES.get(theme, THEMES["dark"])
     fig = go.Figure()
-    fig.update_layout(**PLOT_CFG, annotations=[dict(
+    fig.update_layout(**plot_cfg(theme), annotations=[dict(
         text=msg, xref="paper", yref="paper", x=0.5, y=0.5,
-        showarrow=False, font=dict(color=color or C["muted"], size=15))])
+        showarrow=False, font=dict(color=color or t["muted"], size=15))])
     return fig
 
 LITHO_COLUMN_ALIASES = [
@@ -350,9 +359,9 @@ def infer_site_meta(df, meta):
 def build_metadata_bar(info, manual):
     def field(label, value):
         return html.Div([
-            html.Div(label, style={"color":C["muted"],"fontSize":"9px",
+            html.Div(label, style={"color":"var(--muted)","fontSize":"9px",
                                    "letterSpacing":"1.5px","fontFamily":FONT}),
-            html.Div(value, style={"color":C["text"],"fontSize":"13px",
+            html.Div(value, style={"color":"var(--text)","fontSize":"13px",
                                    "fontWeight":"600","fontFamily":FONT}),
         ], style={"marginRight":"20px"})
     site_hole  = manual.get("site_hole")  or info.get("site_hole","—")
@@ -373,17 +382,17 @@ def build_metadata_bar(info, manual):
         ], style={"display":"flex","alignItems":"center","flexWrap":"wrap"}),
         html.Div([
             html.Span(info.get("filename",""),
-                      style={"background":C["border"],"padding":"3px 10px",
+                      style={"background":"var(--border)","padding":"3px 10px",
                              "borderRadius":"12px","fontSize":"11px","fontFamily":FONT}),
             html.Span(info.get("fmt",""),
-                      style={"background":C["accent"],"color":C["bg"],"padding":"3px 10px",
+                      style={"background":"var(--accent)","color":"var(--bg)","padding":"3px 10px",
                              "borderRadius":"12px","fontSize":"11px","fontWeight":"700"}),
             html.Span(f"{info.get('rows','')} rows",
-                      style={"color":C["muted"],"fontSize":"11px"}),
+                      style={"color":"var(--muted)","fontSize":"11px"}),
         ], style={"display":"flex","gap":"8px","alignItems":"center"}),
     ], style={"display":"flex","justifyContent":"space-between","alignItems":"center",
-              "padding":"10px 20px","background":C["panel"],
-              "borderBottom":f"1px solid {C['border']}","flexWrap":"wrap","gap":"8px"})
+              "padding":"10px 20px","background":"var(--panel)",
+              "borderBottom":f"1px solid var(--border)","flexWrap":"wrap","gap":"8px"})
 
 # =============================================================================
 # CORE-TOP, QC, AND GAP HELPERS
@@ -529,40 +538,18 @@ def search_pangaea(query, count=10):
         return [], str(e)
 
 def search_pangaea_legacy(leg, project="DSDP", count=15):
-    """Search PANGAEA for legacy DSDP/ODP shipboard datasets tied to a Leg number.
-    Mirrors the filters PANGAEA's own web search uses, e.g.:
-      DSDP: pangaea.de/?q=...&f.campaign[]=Leg5&f.project[]=DSDP
-      ODP:  pangaea.de/?q=...&f.campaign[]=Leg118&f.author[]=Shipboard+Scientific+Party
-    Used by the Database auto-detect flow as a fallback once LIMS/LORE (JR
-    expeditions, 317+) comes up empty — DSDP and ODP predate LIMS/LORE and
-    live on PANGAEA instead."""
-    campaign_label = f"Leg{str(leg).strip()}"
-    must = [{"match": {"campaign.label": campaign_label}}]
+    """Search PANGAEA for legacy DSDP/ODP shipboard datasets tied to a Leg
+    number. PANGAEA's Elasticsearch endpoint is documented (and used by its
+    own R client, pangaear) as a plain free-text 'q=' search — not a
+    structured match against specific field names like campaign.label,
+    which was this function's original approach and returned zero hits
+    for every Leg since those field names were never confirmed to exist.
+    Reuses search_pangaea()'s proven free-text query for the same reason."""
     if project == "DSDP":
-        must.append({"match": {"project.label": "DSDP"}})
+        query = f'"Leg {leg}" DSDP'
     else:  # ODP shipboard party datasets
-        must.append({"match": {"author.fullname": "Shipboard Scientific Party"}})
-    body = {
-        "query": {"bool": {"must": must}},
-        "size": count,
-        "_source": ["title", "URI"],
-    }
-    try:
-        r = requests.post(PANGAEA_ES, json=body, timeout=20,
-                          headers={"Content-Type": "application/json"})
-        r.raise_for_status()
-        hits = r.json().get("hits", {}).get("hits", [])
-        results = []
-        for h in hits:
-            src   = h.get("_source", {})
-            uri   = src.get("URI", "")
-            pid   = uri.split(".")[-1] if uri else h.get("_id", "")
-            title = src.get("title", uri)
-            if pid:
-                results.append({"label": f"{pid} — {str(title)[:60]}", "value": pid})
-        return results, None
-    except Exception as e:
-        return [], str(e)
+        query = f'"Leg {leg}" "Shipboard Scientific Party"'
+    return search_pangaea(query, count=count)
 
 DSDP_SHINYLAUREL_URL = "https://shinylaurel.com/shiny/DSDP_data_access/"
 
@@ -705,25 +692,27 @@ def get_expeditions_from_df(df):
 # =============================================================================
 def make_chart(df, ctype, x, y, color, curves,
                litho_df=None, show_gaps=True, show_qc=True, show_core_tops=True,
-               invert_y=True):
+               invert_y=True, theme="dark"):
+    t = THEMES.get(theme, THEMES["dark"])
+    cfg = plot_cfg(theme)
     if ctype == "scatter" and x and y:
         cc = None if color in (None,"None","") else color
         fig = (px.scatter(df, x=x, y=y, color=cc, opacity=0.75)
                .update_traces(marker=dict(size=5))
-               .update_layout(**PLOT_CFG))
+               .update_layout(**cfg))
         # Invert y-axis when depth is on Y
         if invert_y:
             fig.update_yaxes(autorange="reversed")
         return fig
     if ctype == "line" and x and y:
-        fig = px.line(df, x=x, y=y).update_layout(**PLOT_CFG)
+        fig = px.line(df, x=x, y=y).update_layout(**cfg)
         if invert_y:
             fig.update_yaxes(autorange="reversed")
         return fig
     if ctype == "histogram" and x:
         return (px.histogram(df, x=x, nbins=40,
-                             color_discrete_sequence=[C["accent"]])
-                .update_layout(**PLOT_CFG))
+                             color_discrete_sequence=[t["accent"]])
+                .update_layout(**cfg))
     if ctype == "heatmap":
         nc = df.select_dtypes(include="number").columns.tolist()
         if len(nc) < 2:
@@ -731,7 +720,7 @@ def make_chart(df, ctype, x, y, color, curves,
         corr = df[nc].corr().round(2)
         return (px.imshow(corr, text_auto=True, aspect="auto",
                           color_continuous_scale="RdBu_r", zmin=-1, zmax=1)
-                .update_layout(**PLOT_CFG, height=420))
+                .update_layout(**cfg, height=420))
 
     if ctype == "depthlog" and x and curves:
         sel = [c for c in curves if c in df.columns]
@@ -766,7 +755,7 @@ def make_chart(df, ctype, x, y, color, curves,
                 mode="markers", marker_opacity=0, showlegend=False, name=""),
                 row=1, col=col_offset)
             col_offset += 1
-        pal       = [C["accent"],C["accent2"],C["accent3"],"#bc8cff","#ff7b72"]
+        pal       = [t["accent"],t["accent2"],t["accent3"],"#bc8cff","#ff7b72"]
         gaps      = find_recovery_gaps(df, x)  if show_gaps      else []
         core_tops = extract_core_tops(df)       if show_core_tops else {}
         qc_col    = find_qc_col(df)             if show_qc        else None
@@ -788,7 +777,7 @@ def make_chart(df, ctype, x, y, color, curves,
                 fig.add_hrect(y0=gap_top, y1=gap_bot, fillcolor="#888780",
                               opacity=0.18, line_width=0, row=1, col=col_offset+i,
                               annotation_text="gap" if i==0 else "",
-                              annotation_font=dict(size=8, color=C["muted"]),
+                              annotation_font=dict(size=8, color=t["muted"]),
                               annotation_position="top left")
             if qc_depths:
                 qc_df = df.loc[df[x].isin(qc_depths) & df[col].notna()]
@@ -798,7 +787,7 @@ def make_chart(df, ctype, x, y, color, curves,
                         name="QC flagged", showlegend=(i==0),
                         legendgroup="qc_flags",
                         marker=dict(symbol="circle-open", size=8,
-                                    color=C["danger"], line_width=1.5),
+                                    color=t["danger"], line_width=1.5),
                         hovertemplate="%{y:.2f} mbsf - QC flagged<extra></extra>"),
                         row=1, col=col_offset+i)
             if show_core_tops and i==0 and core_tops:
@@ -808,22 +797,22 @@ def make_chart(df, ctype, x, y, color, curves,
                 for core_label, core_depth in core_tops.items():
                     fig.add_shape(type="line", x0=x_min, x1=tick_end,
                                   y0=core_depth, y1=core_depth,
-                                  line=dict(color=C["warn"], width=0.8, dash="dot"),
+                                  line=dict(color=t["warn"], width=0.8, dash="dot"),
                                   row=1, col=col_offset+i)
                     fig.add_annotation(x=tick_end, y=core_depth,
                                        text=core_label.split("-")[-1],
                                        showarrow=False,
-                                       font=dict(size=7, color=C["warn"]),
+                                       font=dict(size=7, color=t["warn"]),
                                        xanchor="left", yanchor="middle",
                                        row=1, col=col_offset+i)
         fig.update_yaxes(autorange="reversed", title_text=x, row=1, col=1)
         # Fixed, scroll-safe height. The depth log uses
         # a constrained height so the controls below it remain accessible.
-        cfg = {**PLOT_CFG, "height": 560}
-        cfg.pop("xaxis",None); cfg.pop("yaxis",None)
+        depthlog_cfg = {**cfg, "height": 560}
+        depthlog_cfg.pop("xaxis",None); depthlog_cfg.pop("yaxis",None)
         return fig.update_layout(showlegend=True,
                                  legend=dict(x=1.01,y=1,font=dict(size=10)),
-                                 **cfg)
+                                 **depthlog_cfg)
     return empty_fig("Select axes to plot")
 
 # =============================================================================
@@ -897,11 +886,11 @@ app.index_string = """<!DOCTYPE html>
 </body>
 </html>"""
 
-TAB_STYLE = {"backgroundColor":C["panel"],"color":C["muted"],
-             "border":f"1px solid {C['border']}","borderBottom":"none",
+TAB_STYLE = {"backgroundColor":"var(--panel)","color":"var(--muted)",
+             "border":f"1px solid var(--border)","borderBottom":"none",
              "fontFamily":FONT,"fontSize":"13px","padding":"8px 20px"}
-TAB_SEL   = {**TAB_STYLE,"backgroundColor":C["bg"],"color":C["text"],
-             "borderBottom":f"1px solid {C['bg']}","fontWeight":"600"}
+TAB_SEL   = {**TAB_STYLE,"backgroundColor":"var(--bg)","color":"var(--text)",
+             "borderBottom":f"1px solid var(--bg)","fontWeight":"600"}
 
 # =============================================================================
 # SHIPBOARD SIDEBAR LAYOUT
@@ -911,35 +900,35 @@ shipboard_sidebar = html.Div([
     # Upload box lists all accepted formats including .tsv
     dcc.Upload(id="upload", multiple=False,
         children=html.Div([
-            html.Div("↑", style={"fontSize":"26px","color":C["accent"]}),
+            html.Div("↑", style={"fontSize":"26px","color":"var(--accent)"}),
             html.Div("Drop file or click to upload"),
             html.Div("Accepted: .csv  .tsv  .xlsx  .las",
-                     style={"color":C["muted"],"fontSize":"10px","marginTop":"3px"}),
-        ], style={"textAlign":"center","color":C["text"],"fontSize":"12px"}),
-        style={"border":f"2px dashed {C['border']}","borderRadius":"8px",
+                     style={"color":"var(--muted)","fontSize":"10px","marginTop":"3px"}),
+        ], style={"textAlign":"center","color":"var(--text)","fontSize":"12px"}),
+        style={"border":f"2px dashed var(--border)","borderRadius":"8px",
                "padding":"16px","cursor":"pointer","marginBottom":"10px"}),
 
     # Litho upload layers on top of the main data — it doesn't replace it
     html.P("LITHO TRACK (optional, layers on chart)", style=LBL),
     html.Div("Upload a separate CSV/XLSX with top depth, bottom depth, and lithology columns. "
              "This adds a color-coded lithology lane to depth log view — it does not replace your main data file.",
-             style={"color":C["muted"],"fontSize":"9px","marginBottom":"4px","fontFamily":FONT,
+             style={"color":"var(--muted)","fontSize":"9px","marginBottom":"4px","fontFamily":FONT,
                     "lineHeight":"1.4"}),
     html.Div("Accepted: .csv  .tsv  .xlsx",
-             style={"color":C["muted"],"fontSize":"9px","marginBottom":"6px","fontFamily":FONT}),
+             style={"color":"var(--muted)","fontSize":"9px","marginBottom":"6px","fontFamily":FONT}),
     dcc.Upload(id="upload-litho", multiple=False,
         children=html.Div([
-            html.Div("↑", style={"fontSize":"18px","color":C["accent3"]}),
+            html.Div("↑", style={"fontSize":"18px","color":"var(--accent3)"}),
             html.Div("Drop litho file or click"),
-        ], style={"textAlign":"center","color":C["text"],"fontSize":"11px"}),
-        style={"border":f"2px dashed {C['border']}","borderRadius":"8px",
+        ], style={"textAlign":"center","color":"var(--text)","fontSize":"11px"}),
+        style={"border":f"2px dashed var(--border)","borderRadius":"8px",
                "padding":"10px","cursor":"pointer","marginBottom":"4px"}),
     html.Div(id="litho-badge"),
 
-    html.Hr(style={"borderColor":C["border"],"margin":"14px 0"}),
+    html.Hr(style={"borderColor":"var(--border)","margin":"14px 0"}),
     html.P("SITE METADATA (optional)", style=LBL),
     html.Div("Auto-detected from LIMS CSV where possible. Fill in any missing fields:",
-             style={"color":C["muted"],"fontSize":"9px","marginBottom":"6px"}),
+             style={"color":"var(--muted)","fontSize":"9px","marginBottom":"6px"}),
     *[html.Div([
         html.Div(label, style={**LBL,"marginTop":"6px"}),
         dcc.Input(id=fid, type="text", placeholder=ph, debounce=True, style=INP),
@@ -952,7 +941,7 @@ shipboard_sidebar = html.Div([
         ("RECOVERY %","meta-recovery","e.g. 68.4"),
     ]],
 
-    html.Hr(style={"borderColor":C["border"],"margin":"14px 0"}),
+    html.Hr(style={"borderColor":"var(--border)","margin":"14px 0"}),
     html.P("X AXIS (depth)", style=LBL),
     dcc.Dropdown(id="x-col", placeholder="Select column...", style=DD),
     html.P("Y AXIS", id="y-lbl", style=LBL),
@@ -962,11 +951,11 @@ shipboard_sidebar = html.Div([
     html.P("CURVES (depth log)", id="curves-lbl", style={**LBL,"display":"none"}),
     dcc.Checklist(id="depth-curves", options=[], value=[],
                   labelStyle={"display":"block","marginBottom":"5px",
-                               "color":C["text"],"fontSize":"12px"},
-                  inputStyle={"marginRight":"6px","accentColor":C["accent"]},
+                               "color":"var(--text)","fontSize":"12px"},
+                  inputStyle={"marginRight":"6px","accentColor":"var(--accent)"},
                   style={"display":"none"}),
 
-    html.Hr(style={"borderColor":C["border"],"margin":"14px 0"}),
+    html.Hr(style={"borderColor":"var(--border)","margin":"14px 0"}),
     html.P("DEPTH LOG OVERLAYS", style=LBL),
     dcc.Checklist(id="overlay-opts",
         options=[{"label":" Recovery gap hatching","value":"gaps"},
@@ -974,20 +963,20 @@ shipboard_sidebar = html.Div([
                  {"label":" Core-top tick marks","value":"core_tops"}],
         value=["gaps","qc","core_tops"],
         labelStyle={"display":"block","marginBottom":"6px",
-                    "color":C["text"],"fontSize":"11px","fontFamily":FONT},
-        inputStyle={"marginRight":"6px","accentColor":C["accent"]}),
+                    "color":"var(--text)","fontSize":"11px","fontFamily":FONT},
+        inputStyle={"marginRight":"6px","accentColor":"var(--accent)"}),
 
     # Y-axis invert toggle
-    html.Hr(style={"borderColor":C["border"],"margin":"14px 0"}),
+    html.Hr(style={"borderColor":"var(--border)","margin":"14px 0"}),
     html.P("AXIS OPTIONS", style=LBL),
     dcc.Checklist(id="axis-opts",
         options=[{"label":" Invert Y-axis (depth: 0 at top)","value":"invert_y"}],
         value=["invert_y"],
         labelStyle={"display":"block","marginBottom":"6px",
-                    "color":C["text"],"fontSize":"11px","fontFamily":FONT},
-        inputStyle={"marginRight":"6px","accentColor":C["accent"]}),
+                    "color":"var(--text)","fontSize":"11px","fontFamily":FONT},
+        inputStyle={"marginRight":"6px","accentColor":"var(--accent)"}),
 
-    html.Hr(style={"borderColor":C["border"],"margin":"14px 0"}),
+    html.Hr(style={"borderColor":"var(--border)","margin":"14px 0"}),
     html.P("CHART TYPE", style={**LBL,"marginTop":"18px"}),
     dcc.RadioItems(id="chart-type", value="scatter",
         options=[{"label":" Scatter","value":"scatter"},
@@ -996,27 +985,27 @@ shipboard_sidebar = html.Div([
                  {"label":" Depth Log","value":"depthlog"},
                  {"label":" Correlation Heatmap","value":"heatmap"}],
         labelStyle={"display":"block","marginBottom":"8px",
-                    "color":C["text"],"fontSize":"12px","fontFamily":FONT},
-        inputStyle={"marginRight":"7px","accentColor":C["accent"]}),
-], style={"width":"240px","minWidth":"240px","background":C["panel"],
-          "borderRight":f"1px solid {C['border']}","padding":"18px"})
+                    "color":"var(--text)","fontSize":"12px","fontFamily":FONT},
+        inputStyle={"marginRight":"7px","accentColor":"var(--accent)"}),
+], style={"width":"240px","minWidth":"240px","background":"var(--panel)",
+          "borderRight":f"1px solid var(--border)","padding":"18px"})
 
 
 # ── Post-Expedition dataset fetch panel ──────────────────────────────────────
 def dataset_panel(ds):
-    accent = C["accent"] if ds == "a" else C["accent3"]
+    accent = "var(--accent)" if ds == "a" else "var(--accent3)"
     label  = "DATASET A" if ds == "a" else "DATASET B"
     repo_hint = html.Div([
         html.Div("Enter a Leg/Expedition number — no need to know which archive it "
                  "lives in. Database mode checks LIMS/LORE first (JR expeditions, "
                  "317+), then falls back to PANGAEA (DSDP, ODP, and MSP expeditions).",
-                 style={"color":C["muted"],"fontSize":"9px","lineHeight":"1.4"}),
+                 style={"color":"var(--muted)","fontSize":"9px","lineHeight":"1.4"}),
         html.Div([
-            html.Span("Note: ", style={"color":C["accent"],"fontWeight":"700"}),
+            html.Span("Note: ", style={"color":"var(--accent)","fontWeight":"700"}),
             html.Span("Chikyu/J-CORES data (KCC/JAMSTEC) has no public API — use "
-                      "Local file upload for those expeditions.", style={"color":C["muted"]}),
+                      "Local file upload for those expeditions.", style={"color":"var(--muted)"}),
         ], style={"fontSize":"9px","marginTop":"4px","fontFamily":FONT}),
-    ], style={"background":C["bg"],"border":f"1px solid {C['border']}",
+    ], style={"background":"var(--bg)","border":f"1px solid var(--border)",
               "borderRadius":"4px","padding":"6px 8px","marginBottom":"8px"})
 
     return html.Div([
@@ -1028,7 +1017,7 @@ def dataset_panel(ds):
                 {"label": " Local file upload",  "value": "upload"},
             ],
             value="database",
-            labelStyle={"display":"block","color":C["muted"],
+            labelStyle={"display":"block","color":"var(--muted)",
                         "fontSize":"11px","marginBottom":"3px"},
             inputStyle={"marginRight":"6px","accentColor":accent},
         ),
@@ -1036,21 +1025,21 @@ def dataset_panel(ds):
             dcc.Upload(id=f"pe-{ds}-upload", multiple=False,
                 children=html.Div([
                     html.Div("Drop file or click to upload",
-                             style={"color":C["muted"],"fontSize":"11px","textAlign":"center"}),
+                             style={"color":"var(--muted)","fontSize":"11px","textAlign":"center"}),
                     html.Div("Accepted: .csv  .tsv  .xlsx  .las",
-                             style={"color":C["muted"],"fontSize":"9px","textAlign":"center","marginTop":"2px"}),
+                             style={"color":"var(--muted)","fontSize":"9px","textAlign":"center","marginTop":"2px"}),
                 ], style={"padding":"10px 0"}),
-                style={"border":f"1px dashed {C['border']}","borderRadius":"6px",
-                       "backgroundColor":C["bg"],"cursor":"pointer","marginTop":"6px"}),
+                style={"border":f"1px dashed var(--border)","borderRadius":"6px",
+                       "backgroundColor":"var(--bg)","cursor":"pointer","marginTop":"6px"}),
             html.Div(id=f"pe-{ds}-upload-status",
-                     style={"fontSize":"10px","color":C["accent2"],"marginTop":"4px"}),
+                     style={"fontSize":"10px","color":"var(--accent2)","marginTop":"4px"}),
         ]),
         html.Div(id=f"pe-{ds}-database-panel", children=[
             dcc.Input(id=f"pe-{ds}-lims-exp",  placeholder="Leg/Expedition (e.g. 344 or 118)",
                       debounce=True, style={**INP,"marginTop":"6px"}),
             html.Div("Site and Hole below populate as soon as this Leg is found in "
                      "LIMS/LORE — pick from the list, don't type a guess.",
-                     style={"color":C["muted"],"fontSize":"9px","marginTop":"6px","lineHeight":"1.4"}),
+                     style={"color":"var(--muted)","fontSize":"9px","marginTop":"6px","lineHeight":"1.4"}),
             dcc.Dropdown(id=f"pe-{ds}-lims-site", placeholder="Site — optional (all sites if blank)",
                          style={**DD,"marginTop":"4px"}),
             dcc.Dropdown(id=f"pe-{ds}-lims-hole", placeholder="Hole — optional (all holes if blank)",
@@ -1062,23 +1051,23 @@ def dataset_panel(ds):
             html.Button(f"Fetch {ds.upper()}", id=f"pe-fetch-{ds}-database",
                         n_clicks=0, style=BTN(accent)),
             html.Div(id=f"pe-{ds}-db-status",
-                     style={"fontSize":"10px","color":C["accent2"],"marginTop":"4px"}),
+                     style={"fontSize":"10px","color":"var(--accent2)","marginTop":"4px"}),
             html.Div(id=f"pe-{ds}-db-results", style={"marginTop":"6px"}),
         ]),
-    ], style={"borderBottom":f"1px solid {C['border']}",
+    ], style={"borderBottom":f"1px solid var(--border)",
               "paddingBottom":"12px","marginBottom":"12px"})
 
 
 post_sidebar = html.Div([
     html.P("POST-EXPEDITION", style={**LBL,"marginTop":"0","fontSize":"11px",
-                                     "color":C["muted"],"letterSpacing":"3px"}),
+                                     "color":"var(--muted)","letterSpacing":"3px"}),
     html.Div("Multi-dataset merge with depth tolerance matching.",
-             style={"color":C["muted"],"fontSize":"9px","marginBottom":"12px"}),
+             style={"color":"var(--muted)","fontSize":"9px","marginBottom":"12px"}),
     dataset_panel("a"),
     dataset_panel("b"),
     html.P("VIEW MODE", style={**LBL,"marginTop":"0"}),
     html.Div("Explore a single dataset on its own, or merge A + B by depth first.",
-             style={"color":C["muted"],"fontSize":"9px","marginBottom":"6px"}),
+             style={"color":"var(--muted)","fontSize":"9px","marginBottom":"6px"}),
     dcc.RadioItems(id="pe-view-mode", value="merged",
         options=[
             {"label": " Merged (A + B)",   "value": "merged"},
@@ -1086,19 +1075,19 @@ post_sidebar = html.Div([
             {"label": " Dataset B only",   "value": "b"},
         ],
         labelStyle={"display":"block","marginBottom":"6px",
-                    "color":C["text"],"fontSize":"11px","fontFamily":FONT},
-        inputStyle={"marginRight":"6px","accentColor":C["accent"]}),
-    html.Hr(style={"borderColor":C["border"],"margin":"10px 0"}),
+                    "color":"var(--text)","fontSize":"11px","fontFamily":FONT},
+        inputStyle={"marginRight":"6px","accentColor":"var(--accent)"}),
+    html.Hr(style={"borderColor":"var(--border)","margin":"10px 0"}),
     html.P("MERGE SETTINGS", style={**LBL,"marginTop":"0"}),
-    html.Div("Depth tolerance (cm)", style={"color":C["muted"],"fontSize":"10px","marginBottom":"4px"}),
+    html.Div("Depth tolerance (cm)", style={"color":"var(--muted)","fontSize":"10px","marginBottom":"4px"}),
     dcc.Input(id="pe-tolerance", value="2", type="number", min=0, max=500, style=INP),
-    html.Div("Depth col — A", style={"color":C["muted"],"fontSize":"10px","marginTop":"8px","marginBottom":"4px"}),
+    html.Div("Depth col — A", style={"color":"var(--muted)","fontSize":"10px","marginTop":"8px","marginBottom":"4px"}),
     dcc.Dropdown(id="pe-depth-a", options=[], placeholder="auto-detect", style=DD),
-    html.Div("Depth col — B", style={"color":C["muted"],"fontSize":"10px","marginTop":"8px","marginBottom":"4px"}),
+    html.Div("Depth col — B", style={"color":"var(--muted)","fontSize":"10px","marginTop":"8px","marginBottom":"4px"}),
     dcc.Dropdown(id="pe-depth-b", options=[], placeholder="auto-detect", style=DD),
     html.Button("Merge datasets", id="pe-merge-btn", n_clicks=0,
-                style={**BTN(C["accent2"]),"marginTop":"10px","fontSize":"12px"}),
-    html.Hr(style={"borderColor":C["border"],"margin":"10px 0"}),
+                style={**BTN("var(--accent2)"),"marginTop":"10px","fontSize":"12px"}),
+    html.Hr(style={"borderColor":"var(--border)","margin":"10px 0"}),
     html.P("CHART MODE", style=LBL),
     dcc.RadioItems(id="pe-chart-mode", value="tracks",
         options=[
@@ -1108,8 +1097,8 @@ post_sidebar = html.Div([
             {"label": " Rolling mean  (smoothed downhole trends)", "value": "rolling"},
         ],
         labelStyle={"display":"block","marginBottom":"6px",
-                    "color":C["text"],"fontSize":"11px","fontFamily":FONT},
-        inputStyle={"marginRight":"6px","accentColor":C["accent2"]},
+                    "color":"var(--text)","fontSize":"11px","fontFamily":FONT},
+        inputStyle={"marginRight":"6px","accentColor":"var(--accent2)"},
     ),
     html.P("DEPTH COLUMN", style=LBL),
     dcc.Dropdown(id="pe-xaxis", options=[], value=None, style=DD),
@@ -1124,8 +1113,8 @@ post_sidebar = html.Div([
         dcc.Input(id="pe-rolling-window", value="20", type="number",
                   min=2, max=500, style=INP),
     ]),
-], style={"width":"260px","minWidth":"260px","background":C["panel"],
-          "borderRight":f"1px solid {C['border']}","padding":"18px"})
+], style={"width":"260px","minWidth":"260px","background":"var(--panel)",
+          "borderRight":f"1px solid var(--border)","padding":"18px"})
 
 # =============================================================================
 # APP LAYOUT
@@ -1134,21 +1123,21 @@ app.layout = html.Div([
     html.Div([
         html.Div([
             html.Div([
-                html.Span("IODP",      style={"fontWeight":"700","color":C["accent"]}),
-                html.Span(" Explorer", style={"fontWeight":"300","color":C["text"]}),
+                html.Span("IODP",      style={"fontWeight":"700","color":"var(--accent)"}),
+                html.Span(" Explorer", style={"fontWeight":"300","color":"var(--text)"}),
             ], style={"fontSize":"17px","fontFamily":FONT}),
             html.Div("International Ocean Discovery Program · Data Visualization Tool",
-                     style={"color":C["muted"],"fontSize":"11px","fontFamily":FONT}),
+                     style={"color":"var(--muted)","fontSize":"11px","fontFamily":FONT}),
         ]),
         html.Button(id="theme-toggle", n_clicks=0,
             children="☀ Light mode",
-            style={"backgroundColor":"transparent","border":f"1px solid {C['border']}",
-                   "borderRadius":"6px","color":C["muted"],"cursor":"pointer",
+            style={"backgroundColor":"transparent","border":f"1px solid var(--border)",
+                   "borderRadius":"6px","color":"var(--muted)","cursor":"pointer",
                    "fontSize":"11px","fontFamily":FONT,"padding":"5px 12px",
                    "transition":"all 0.2s"}),
     ], style={"display":"flex","justifyContent":"space-between","alignItems":"center",
-              "padding":"8px 20px","background":C["panel"],
-              "borderBottom":f"1px solid {C['border']}"}),
+              "padding":"8px 20px","background":"var(--panel)",
+              "borderBottom":f"1px solid var(--border)"}),
     html.Div(id="theme-root", style={"display":"none"}),
 
     dcc.Tabs(id="main-tabs", value="shipboard", style={"fontFamily":FONT},
@@ -1172,7 +1161,7 @@ app.layout = html.Div([
     dcc.Store(id="pe-active-store"),
 
 ], style={"minHeight":"100vh","display":"flex","flexDirection":"column",
-          "background":C["bg"],"color":C["text"],"fontFamily":FONT})
+          "background":"var(--bg)","color":"var(--text)","fontFamily":FONT})
 
 # =============================================================================
 # TAB ROUTING
@@ -1183,14 +1172,14 @@ def render_tab(tab):
         return html.Div([
             html.Div(id="meta-banner",
                      children=html.Div("Upload a file to see site metadata.",
-                         style={"color":C["muted"],"fontSize":"11px",
+                         style={"color":"var(--muted)","fontSize":"11px",
                                 "padding":"10px 20px","fontFamily":FONT})),
             html.Div([
                 shipboard_sidebar,
                 html.Div([
                     html.Div(id="kpi-bar",
                              style={"display":"flex","gap":"10px","padding":"10px 18px",
-                                    "borderBottom":f"1px solid {C['border']}","flexWrap":"wrap"}),
+                                    "borderBottom":f"1px solid var(--border)","flexWrap":"wrap"}),
                     # Graph wrapped in constrained div to prevent depth log overflow
                    html.Div(
                         dcc.Graph(id="main-chart",
@@ -1200,10 +1189,10 @@ def render_tab(tab):
                     ),
                     html.Div([
                         html.Div([
-                            html.Span("DATA TABLE", style={"color":C["muted"],"fontSize":"10px","letterSpacing":"2px"}),
-                            html.Span(id="row-count", style={"color":C["accent"],"fontSize":"11px","marginLeft":"12px"}),
+                            html.Span("DATA TABLE", style={"color":"var(--muted)","fontSize":"10px","letterSpacing":"2px"}),
+                            html.Span(id="row-count", style={"color":"var(--accent)","fontSize":"11px","marginLeft":"12px"}),
                             html.Span(" — values shown are measured per sample",
-                                      style={"color":C["muted"],"fontSize":"9px","marginLeft":"8px"}),
+                                      style={"color":"var(--muted)","fontSize":"9px","marginLeft":"8px"}),
                         ], style={"marginBottom":"8px"}),
                         html.Div(id="table-container",
                                  className="iodp-table-scroll"),
@@ -1218,47 +1207,47 @@ def render_tab(tab):
             html.Div([
                 html.Div([
                     html.Div(id="pe-status-a",
-                        style={"flex":"1","background":C["panel"],"border":f"1px solid {C['border']}",
+                        style={"flex":"1","background":"var(--panel)","border":f"1px solid var(--border)",
                                "borderRadius":"6px","padding":"10px 14px","fontSize":"12px",
-                               "color":C["muted"],"marginRight":"8px"}),
+                               "color":"var(--muted)","marginRight":"8px"}),
                     html.Div(id="pe-status-b",
-                        style={"flex":"1","background":C["panel"],"border":f"1px solid {C['border']}",
+                        style={"flex":"1","background":"var(--panel)","border":f"1px solid var(--border)",
                                "borderRadius":"6px","padding":"10px 14px","fontSize":"12px",
-                               "color":C["muted"],"marginRight":"8px"}),
+                               "color":"var(--muted)","marginRight":"8px"}),
                     html.Div(id="pe-status-merged",
-                        style={"flex":"1","background":C["panel"],"border":f"1px solid {C['border']}",
+                        style={"flex":"1","background":"var(--panel)","border":f"1px solid var(--border)",
                                "borderRadius":"6px","padding":"10px 14px","fontSize":"12px",
-                               "color":C["muted"]}),
+                               "color":"var(--muted)"}),
                 ], style={"display":"flex","marginBottom":"12px"}),
                 html.Div([
                     html.Div([
                         html.Span("FILTER BY EXPEDITION",
-                                  style={"color":C["text"],"fontSize":"11px","letterSpacing":"1px",
+                                  style={"color":"var(--text)","fontSize":"11px","letterSpacing":"1px",
                                          "fontWeight":"600"}),
                         html.Span(" — check/uncheck to show only those expeditions in the chart and table",
-                                  style={"color":C["muted"],"fontSize":"10px","marginLeft":"6px"}),
+                                  style={"color":"var(--muted)","fontSize":"10px","marginLeft":"6px"}),
                         html.Button("All / None", id="pe-exp-all-none", n_clicks=0,
-                            style={"backgroundColor":C["border"],"color":C["text"],"border":"none",
+                            style={"backgroundColor":"var(--border)","color":"var(--text)","border":"none",
                                    "borderRadius":"4px","padding":"3px 10px","cursor":"pointer",
                                    "fontSize":"10px","marginLeft":"12px"}),
                     ], style={"marginBottom":"8px","display":"flex","alignItems":"center","flexWrap":"wrap"}),
                     html.Div(id="pe-exp-filter-hint",
                              children="No expedition column detected in data yet.",
-                             style={"color":C["muted"],"fontSize":"10px","fontStyle":"italic",
+                             style={"color":"var(--muted)","fontSize":"10px","fontStyle":"italic",
                                     "display":"none"}),
                     dcc.Checklist(id="pe-exp-filter", options=[], value=[],
                         labelStyle={"display":"inline-block","margin":"3px 8px 3px 0",
-                                    "color":C["muted"],"fontSize":"11px"}),
+                                    "color":"var(--muted)","fontSize":"11px"}),
                 ], style={**CARD,"marginBottom":"12px"}),
 
                 html.Div([
                     html.Span("Expeditions in view: ",
-                              style={"color":C["muted"],"fontSize":"11px","marginRight":"6px"}),
+                              style={"color":"var(--muted)","fontSize":"11px","marginRight":"6px"}),
                     html.Span(id="pe-merged-expeditions",
-                              style={"color":C["accent2"],"fontSize":"11px","fontFamily":FONT}),
+                              style={"color":"var(--accent2)","fontSize":"11px","fontFamily":FONT}),
                     html.Button("Download CSV", id="pe-download-btn", n_clicks=0,
-                        style={"backgroundColor":C["panel"],"color":C["accent"],
-                               "border":f"1px solid {C['border']}","borderRadius":"4px",
+                        style={"backgroundColor":"var(--panel)","color":"var(--accent)",
+                               "border":f"1px solid var(--border)","borderRadius":"4px",
                                "padding":"4px 12px","cursor":"pointer",
                                "fontSize":"11px","marginLeft":"16px"}),
                     dcc.Download(id="pe-download"),
@@ -1346,31 +1335,31 @@ def load_file(contents, filename):
 )
 def load_litho(contents, filename):
     if not contents:
-        return None, html.Div("No litho file loaded.", style={"color":C["muted"],"fontSize":"10px"})
+        return None, html.Div("No litho file loaded.", style={"color":"var(--muted)","fontSize":"10px"})
     df_litho, meta = parse_upload(contents, filename)
     if "error" in meta or df_litho is None:
         return None, html.Div(f"Error: {meta.get('error','Unknown')}",
-                               style={"color":C["danger"],"fontSize":"10px"})
+                               style={"color":"var(--danger)","fontSize":"10px"})
     df_litho, error = resolve_litho_columns(df_litho)
     if error:
         return None, html.Div([
             html.Div("Could not identify lithology columns.",
-                     style={"color":C["danger"],"fontSize":"11px","fontWeight":"700","marginBottom":"6px"}),
-            html.Pre(error, style={"color":C["muted"],"fontSize":"9px","fontFamily":FONT,
+                     style={"color":"var(--danger)","fontSize":"11px","fontWeight":"700","marginBottom":"6px"}),
+            html.Pre(error, style={"color":"var(--muted)","fontSize":"9px","fontFamily":FONT,
                                    "whiteSpace":"pre-wrap","maxHeight":"160px","overflowY":"auto",
-                                   "background":C["bg"],"padding":"8px","borderRadius":"4px",
-                                   "border":f"1px solid {C['border']}"}),
+                                   "background":"var(--bg)","padding":"8px","borderRadius":"4px",
+                                   "border":f"1px solid var(--border)"}),
         ])
     n_units     = len(df_litho)
     depth_range = f"{df_litho['top_mbsf'].min():.1f} - {df_litho['bottom_mbsf'].max():.1f} mbsf"
     return df2j(df_litho), html.Div([
         html.Span(f"✓ {filename}",
-                  style={"background":C["border"],"padding":"3px 8px","borderRadius":"10px",
-                         "fontSize":"10px","color":C["accent2"],"fontFamily":FONT}),
+                  style={"background":"var(--border)","padding":"3px 8px","borderRadius":"10px",
+                         "fontSize":"10px","color":"var(--accent2)","fontFamily":FONT}),
         html.Span(f"{n_units} units · {depth_range}",
-                  style={"color":C["muted"],"fontSize":"10px","fontFamily":FONT,"marginLeft":"6px"}),
+                  style={"color":"var(--muted)","fontSize":"10px","fontFamily":FONT,"marginLeft":"6px"}),
         html.Div("Litho track will appear in Depth Log view.",
-                 style={"color":C["accent3"],"fontSize":"9px","marginTop":"3px","fontFamily":FONT}),
+                 style={"color":"var(--accent3)","fontSize":"9px","marginTop":"3px","fontFamily":FONT}),
     ])
 
 @app.callback(
@@ -1383,7 +1372,7 @@ def load_litho(contents, filename):
 def update_meta_banner(site_info, expedition, site_hole, lat, lon, water_depth, recovery):
     if not site_info:
         return html.Div("Upload a file to see site metadata.",
-                        style={"color":C["muted"],"fontSize":"11px","padding":"10px 20px","fontFamily":FONT})
+                        style={"color":"var(--muted)","fontSize":"11px","padding":"10px 20px","fontFamily":FONT})
     manual = {"expedition":expedition or "","site_hole":site_hole or "",
               "lat":lat or "","lon":lon or "","water_depth":water_depth or "","recovery":recovery or ""}
     return build_metadata_bar(site_info, manual)
@@ -1436,15 +1425,15 @@ def toggle_controls(ctype):
               Input("store-df","data"), Input("store-meta","data"))
 def update_kpis(jdf, meta):
     if not jdf:
-        return [html.Span("Upload a file to begin.",style={"color":C["muted"],"fontSize":"12px"})]
+        return [html.Span("Upload a file to begin.",style={"color":"var(--muted)","fontSize":"12px"})]
     df = j2df(jdf); cards = []
     for col in meta.get("numeric_cols",[])[:6]:
         v = df[col].dropna()
         if not len(v): continue
         cards.append(html.Div([
-            html.Div(col, style={"color":C["muted"],"fontSize":"9px","letterSpacing":"1px"}),
-            html.Div(f"{v.mean():.3g}", style={"color":C["text"],"fontSize":"17px","fontWeight":"700"}),
-            html.Div(f"min {v.min():.3g}  max {v.max():.3g}",style={"color":C["muted"],"fontSize":"9px"}),
+            html.Div(col, style={"color":"var(--muted)","fontSize":"9px","letterSpacing":"1px"}),
+            html.Div(f"{v.mean():.3g}", style={"color":"var(--text)","fontSize":"17px","fontWeight":"700"}),
+            html.Div(f"min {v.min():.3g}  max {v.max():.3g}",style={"color":"var(--muted)","fontSize":"9px"}),
         ], style={**CARD,"minWidth":"110px","padding":"8px 12px"}))
     return cards
 
@@ -1454,11 +1443,11 @@ def update_kpis(jdf, meta):
     Input("chart-type","value"), Input("x-col","value"),
     Input("y-col","value"), Input("color-col","value"),
     Input("depth-curves","value"), Input("overlay-opts","value"),
-    Input("axis-opts","value"),
+    Input("axis-opts","value"), Input("theme-store","data"),
 )
-def update_chart(jdf, jlitho, ctype, x, y, color, curves, overlays, axis_opts):
+def update_chart(jdf, jlitho, ctype, x, y, color, curves, overlays, axis_opts, theme):
     """Rebuild chart on any control change; passes invert_y from axis-opts."""
-    if not jdf: return empty_fig()
+    if not jdf: return empty_fig(theme=theme)
     overlays  = overlays  or []
     axis_opts = axis_opts or []
     invert_y  = "invert_y" in axis_opts
@@ -1468,9 +1457,10 @@ def update_chart(jdf, jlitho, ctype, x, y, color, curves, overlays, axis_opts):
                           show_gaps=("gaps" in overlays),
                           show_qc=("qc" in overlays),
                           show_core_tops=("core_tops" in overlays),
-                          invert_y=invert_y)
+                          invert_y=invert_y, theme=theme)
     except Exception as e:
-        return empty_fig("Error: "+str(e), C["danger"])
+        t = THEMES.get(theme, THEMES["dark"])
+        return empty_fig("Error: "+str(e), t["danger"], theme=theme)
 
 @app.callback(
     Output("table-container","children"), Output("row-count","children"),
@@ -1479,21 +1469,21 @@ def update_chart(jdf, jlitho, ctype, x, y, color, curves, overlays, axis_opts):
 def update_table(jdf):
     """Table rendered inside the iodp-table-scroll div for independent scrolling."""
     if not jdf:
-        return html.Div("No data loaded.",style={"color":C["muted"]}), ""
+        return html.Div("No data loaded.",style={"color":"var(--muted)"}), ""
     df = j2df(jdf); preview = df.head(200)
     tbl = dash_table.DataTable(
         data=preview.to_dict("records"),
         columns=[{"name":c,"id":c} for c in preview.columns],
         page_size=10, sort_action="native", filter_action="native",
         style_table={"overflowX":"auto","minWidth":"100%"},
-        style_header={"backgroundColor":C["bg"],"color":C["accent"],
-                      "fontWeight":"700","fontSize":"10px","border":f"1px solid {C['border']}"},
-        style_cell={"backgroundColor":C["panel"],"color":C["text"],"fontSize":"11px",
-                    "padding":"7px 11px","border":f"1px solid {C['border']}",
+        style_header={"backgroundColor":"var(--bg)","color":"var(--accent)",
+                      "fontWeight":"700","fontSize":"10px","border":f"1px solid var(--border)"},
+        style_cell={"backgroundColor":"var(--panel)","color":"var(--text)","fontSize":"11px",
+                    "padding":"7px 11px","border":f"1px solid var(--border)",
                     "fontFamily":FONT,"maxWidth":"160px","overflow":"hidden","textOverflow":"ellipsis"},
         style_data_conditional=[
-            {"if":{"row_index":"odd"},"backgroundColor":C["bg"]},
-            *[{"if":{"filter_query":f'{{{col}}} != ""',"column_id":col},"color":C["warn"]}
+            {"if":{"row_index":"odd"},"backgroundColor":"var(--bg)"},
+            *[{"if":{"filter_query":f'{{{col}}} != ""',"column_id":col},"color":"var(--warn)"}
               for col in preview.columns if re.search(r"comment",col,re.IGNORECASE)],
         ],
         fixed_rows={"headers": True},
@@ -1538,14 +1528,14 @@ def _pangaea_pick_list(ds, results):
     """Clickable list of PANGAEA matches — each button fetches that dataset."""
     return html.Div([
         html.Div("Pick a match to load it:",
-                 style={"color":C["muted"],"fontSize":"9px","marginBottom":"4px"}),
+                 style={"color":"var(--muted)","fontSize":"9px","marginBottom":"4px"}),
         *[html.Button(r["label"],
             id={"type":"pe-db-pick", "ds":ds, "pid":r["value"]},
             n_clicks=0,
             style={"display":"block","width":"100%","textAlign":"left",
                    "background":"none","border":"none",
-                   "borderBottom":f"1px solid {C['border']}",
-                   "color":C["accent3"],"cursor":"pointer",
+                   "borderBottom":f"1px solid var(--border)",
+                   "color":"var(--accent3)","cursor":"pointer",
                    "fontSize":"10px","padding":"4px 0","fontFamily":FONT})
           for r in results[:8]]
     ])
@@ -1708,7 +1698,7 @@ def pe_status_cards(da, db):
         df = j2df(d)
         return [html.Span(f"{label}  ",style={"color":color,"fontWeight":"600"}),
                 html.Span(f"{len(df):,} rows x {len(df.columns)} cols")]
-    return card(da,"Dataset A",C["accent"]), card(db,"Dataset B",C["accent3"])
+    return card(da,"Dataset A","var(--accent)"), card(db,"Dataset B","var(--accent3)")
 
 @app.callback(
     Output("pe-exp-filter","options"), Output("pe-exp-filter","value"),
@@ -1750,7 +1740,7 @@ def pe_merge(n, da, db, dca, dcb, tol):
         dfb2 = dfb.rename(columns={dcb:"depth_key"})
         merged = depth_tolerance_merge(dfa2, dfb2, tol_cm)
         n_match = merged["depth_key"].notna().sum()
-        status = [html.Span("Merged  ",style={"color":C["accent2"],"fontWeight":"600"}),
+        status = [html.Span("Merged  ",style={"color":"var(--accent2)","fontWeight":"600"}),
                   html.Span(f"{len(merged):,} rows, {n_match:,} depth matches (tol={tol_cm} cm)")]
         return df2j(merged), status
     except Exception as e:
@@ -1834,10 +1824,11 @@ def pe_rolling_toggle(mode):
     Input("pe-active-store","data"), Input("pe-exp-filter","value"),
     Input("pe-xaxis","value"), Input("pe-yaxis","value"),
     Input("pe-ycols-b","value"), Input("pe-chart-mode","value"),
-    Input("pe-rolling-window","value"),
+    Input("pe-rolling-window","value"), Input("theme-store","data"),
 )
-def pe_chart(da, selected, xcol, ycols_a, ycols_b, mode, rwin):
-    if not da or not xcol: return empty_fig("Load a dataset (or merge A + B) to visualize")
+def pe_chart(da, selected, xcol, ycols_a, ycols_b, mode, rwin, theme="dark"):
+    t = THEMES.get(theme, THEMES["dark"])
+    if not da or not xcol: return empty_fig("Load a dataset (or merge A + B) to visualize", theme=theme)
     df = j2df(da)
     exp_col = next((c for c in df.columns if "expedition" in c.lower()), None)
     if exp_col and selected:
@@ -1849,13 +1840,13 @@ def pe_chart(da, selected, xcol, ycols_a, ycols_b, mode, rwin):
     ycols_a = [c for c in ycols_a if c in df.columns]
     ycols_b = [c for c in ycols_b if c in df.columns]
     all_cols = ycols_a + ycols_b
-    if not all_cols: return empty_fig("Select columns for Dataset A and/or B")
+    if not all_cols: return empty_fig("Select columns for Dataset A and/or B", theme=theme)
 
-    colors_a = [C["accent"], "#bc8cff", "#ff7b72"]
-    colors_b = [C["accent3"], C["accent2"], "#f0883e"]
-    cfg_base = {**PLOT_CFG, "height": 600}
+    colors_a = [t["accent"], "#bc8cff", "#ff7b72"]
+    colors_b = [t["accent3"], t["accent2"], "#f0883e"]
+    cfg_base = {**plot_cfg(theme), "height": 600}
     cfg_base.pop("xaxis", None); cfg_base.pop("yaxis", None)
-    axis_kw  = dict(gridcolor=C["border"], linecolor=C["border"])
+    axis_kw  = dict(gridcolor=t["border"], linecolor=t["border"])
 
     if mode == "tracks":
         n_cols = len(all_cols)
@@ -1878,15 +1869,15 @@ def pe_chart(da, selected, xcol, ycols_a, ycols_b, mode, rwin):
 
     if mode == "scatter":
         if not ycols_a or not ycols_b:
-            return empty_fig("Select at least one column from each dataset")
+            return empty_fig("Select at least one column from each dataset", theme=theme)
         xa = ycols_a[0]; xb = ycols_b[0]
         sub = df[[xcol, xa, xb]].dropna()
         fig = go.Figure(go.Scatter(
             x=sub[xa], y=sub[xb], mode="markers",
             marker=dict(color=sub[xcol], colorscale="Viridis_r", size=5, opacity=0.75,
-                        colorbar=dict(title=xcol + " mbsf",
-                                      tickfont=dict(color=C["muted"]),
-                                      titlefont=dict(color=C["muted"])),
+                        colorbar=dict(title=dict(text=xcol + " mbsf",
+                                                 font=dict(color=t["muted"])),
+                                      tickfont=dict(color=t["muted"])),
                         showscale=True),
             hovertemplate=f"{xa}: %{{x:.3g}}<br>{xb}: %{{y:.3g}}<br>depth: %{{marker.color:.1f}} mbsf<extra></extra>",
         ))
@@ -1896,31 +1887,31 @@ def pe_chart(da, selected, xcol, ycols_a, ycols_b, mode, rwin):
             r = np.corrcoef(sub[xa].values, sub[xb].values)[0, 1]
             fig.add_trace(go.Scatter(x=x_r, y=m*x_r+b, mode="lines",
                                      name=f"r={r:.3f}",
-                                     line=dict(color=C["danger"], width=1.5, dash="dash")))
+                                     line=dict(color=t["danger"], width=1.5, dash="dash")))
         except Exception:
             pass
-        fig.update_layout(**{**PLOT_CFG,"height":600},
-                          xaxis=dict(title=xa,**axis_kw),
-                          yaxis=dict(title=xb,**axis_kw), showlegend=True)
+        fig.update_layout(**{**plot_cfg(theme), "height":600,
+                             "xaxis": dict(title=xa,**axis_kw),
+                             "yaxis": dict(title=xb,**axis_kw), "showlegend":True})
         return fig
 
     if mode == "dual":
         if not ycols_a or not ycols_b:
-            return empty_fig("Select at least one column from each dataset")
+            return empty_fig("Select at least one column from each dataset", theme=theme)
         ya = ycols_a[0]; yb = ycols_b[0]
         fig = go.Figure()
         sub_a = df[[xcol,ya]].dropna(); sub_b = df[[xcol,yb]].dropna()
         fig.add_trace(go.Scatter(x=sub_a[xcol], y=sub_a[ya], mode="lines", name=ya,
-                                 line=dict(color=C["accent"],width=1.5), yaxis="y1"))
+                                 line=dict(color=t["accent"],width=1.5), yaxis="y1"))
         fig.add_trace(go.Scatter(x=sub_b[xcol], y=sub_b[yb], mode="lines", name=yb,
-                                 line=dict(color=C["accent3"],width=1.5,dash="dot"), yaxis="y2"))
-        layout = {**PLOT_CFG,"height":600,
+                                 line=dict(color=t["accent3"],width=1.5,dash="dot"), yaxis="y2"))
+        layout = {**plot_cfg(theme),"height":600,
             "xaxis": dict(title=xcol+" (mbsf)",**axis_kw),
-            "yaxis": dict(title=ya, color=C["accent"],**axis_kw),
-            "yaxis2": dict(title=yb, color=C["accent3"], overlaying="y", side="right",
-                           gridcolor="rgba(0,0,0,0)", linecolor=C["border"]),
+            "yaxis": dict(title=ya, color=t["accent"],**axis_kw),
+            "yaxis2": dict(title=yb, color=t["accent3"], overlaying="y", side="right",
+                           gridcolor="rgba(0,0,0,0)", linecolor=t["border"]),
             "showlegend":True,
-            "legend":dict(bgcolor=C["panel"],bordercolor=C["border"],borderwidth=1),
+            "legend":dict(bgcolor=t["panel"],bordercolor=t["border"],borderwidth=1),
         }
         fig.update_layout(**layout)
         return fig
@@ -1944,11 +1935,11 @@ def pe_chart(da, selected, xcol, ycols_a, ycols_b, mode, rwin):
             fig.update_xaxes(title_text=yc,title_font=dict(size=10),**axis_kw,row=1,col=i+1)
         fig.update_yaxes(title_text=xcol+" (mbsf)",autorange="reversed",**axis_kw)
         fig.update_layout(showlegend=True,
-                          legend=dict(bgcolor=C["panel"],bordercolor=C["border"],
+                          legend=dict(bgcolor=t["panel"],bordercolor=t["border"],
                                       borderwidth=1,font=dict(size=10)), **cfg_base)
         return fig
 
-    return empty_fig("Select a chart mode")
+    return empty_fig("Select a chart mode", theme=theme)
 
 @app.callback(
     Output("pe-table-container","children"),
@@ -1966,12 +1957,12 @@ def pe_table(da, selected):
         columns=[{"name":c,"id":c} for c in preview.columns],
         page_size=10, sort_action="native", filter_action="native",
         style_table={"overflowX":"auto","minWidth":"100%"},
-        style_header={"backgroundColor":C["bg"],"color":C["accent"],
-                      "fontWeight":"700","fontSize":"10px","border":f"1px solid {C['border']}"},
-        style_cell={"backgroundColor":C["panel"],"color":C["text"],"fontSize":"11px",
-                    "padding":"7px 11px","border":f"1px solid {C['border']}",
+        style_header={"backgroundColor":"var(--bg)","color":"var(--accent)",
+                      "fontWeight":"700","fontSize":"10px","border":f"1px solid var(--border)"},
+        style_cell={"backgroundColor":"var(--panel)","color":"var(--text)","fontSize":"11px",
+                    "padding":"7px 11px","border":f"1px solid var(--border)",
                     "fontFamily":FONT,"maxWidth":"160px","overflow":"hidden","textOverflow":"ellipsis"},
-        style_data_conditional=[{"if":{"row_index":"odd"},"backgroundColor":C["bg"]}],
+        style_data_conditional=[{"if":{"row_index":"odd"},"backgroundColor":"var(--bg)"}],
         fixed_rows={"headers": True},
     )
 
