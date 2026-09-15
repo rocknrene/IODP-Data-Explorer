@@ -5,6 +5,11 @@ import io
 import base64
 import re
 import json
+import os
+import time
+import tempfile
+import shutil
+import zipfile
 import requests
 
 import numpy as np
@@ -436,7 +441,7 @@ def _restrict_to_request(df, expedition, site, hole):
     partially filtered) result instead of zero rows. Re-check the returned
     rows against what was actually requested so a typo'd or nonexistent
     site/hole doesn't get reported as a clean, on-target fetch."""
-    exp_col = _find_col(df, ["exp"])
+    exp_col = _find_col(df, ["exp", "leg"])
     if exp_col is not None and expedition:
         df = df[df[exp_col].astype(str).str.strip().str.lower()
                  == str(expedition).strip().lower()]
@@ -558,6 +563,121 @@ def search_pangaea_legacy(leg, project="DSDP", count=15):
         return results, None
     except Exception as e:
         return [], str(e)
+
+DSDP_SHINYLAUREL_URL = "https://shinylaurel.com/shiny/DSDP_data_access/"
+
+# shinylaurel.com's DSDP_data_access app organizes legacy DSDP data by its own
+# category vocabulary (paleontology/lithology-style labels), not by LORE's
+# physical-property report codes — so only report types with a confident,
+# known match are wired up here. Extend this once the app's full category
+# list (it's a long alphabetical button list) has been confirmed.
+SHINYLAUREL_DSDP_TYPES = {
+    "mad": "density and porosity",
+}
+
+def fetch_dsdp_shinylaurel(data_type_label, expedition, site="", hole="", timeout=45):
+    """Drives shinylaurel.com's DSDP_data_access Shiny app the way a browser
+    would, since the app has no stable download API — its download link is
+    scoped to a single live session (see the app's rendered HTML: the href
+    is 'session/<random-token>/download/...', good only for that one
+    browser session). Selects the given data type under the app's
+    'Data by Type' tab, downloads the resulting file, then filters it
+    locally to the requested Leg/Site/Hole, since the app hands back every
+    Leg for that data type in one table rather than letting you query by Leg.
+
+    NOTE: this has not been exercised against the live site — this sandbox
+    has no network path to shinylaurel.com and no Chromium binary to run
+    Selenium at all, so this is built from the app's rendered HTML rather
+    than a live test. Expect to need at least one round of fixes once this
+    actually runs on the deployed Space.
+    """
+    try:
+        from selenium import webdriver
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.chrome.service import Service
+        from selenium.webdriver.chrome.options import Options
+    except ImportError:
+        return None, "Selenium isn't installed in this environment"
+
+    tmp_dir = tempfile.mkdtemp(prefix="dsdp_dl_")
+    chrome_opts = Options()
+    chrome_opts.add_argument("--headless=new")
+    chrome_opts.add_argument("--no-sandbox")
+    chrome_opts.add_argument("--disable-dev-shm-usage")
+    chrome_opts.binary_location = os.environ.get("CHROME_BIN", "/usr/bin/chromium")
+    chrome_opts.add_experimental_option("prefs", {
+        "download.default_directory": tmp_dir,
+        "download.prompt_for_download": False,
+        "safebrowsing.enabled": True,
+    })
+    driver_path = os.environ.get("CHROMEDRIVER_PATH", "/usr/bin/chromedriver")
+
+    driver = None
+    df = None
+    try:
+        driver = webdriver.Chrome(service=Service(driver_path), options=chrome_opts)
+        # Headless Chrome needs downloads explicitly allowed via CDP —
+        # the prefs dict above isn't always honored in headless mode alone.
+        driver.execute_cdp_cmd("Page.setDownloadBehavior", {
+            "behavior": "allow", "downloadPath": tmp_dir,
+        })
+        wait = WebDriverWait(driver, timeout)
+
+        driver.get(DSDP_SHINYLAUREL_URL)
+        wait.until(EC.element_to_be_clickable((By.LINK_TEXT, "Data by Type"))).click()
+
+        type_btn_xpath = (
+            "//div[@id='button_list_datapreview']"
+            f"//button[normalize-space(text())='{data_type_label}']"
+        )
+        wait.until(EC.element_to_be_clickable((By.XPATH, type_btn_xpath))).click()
+
+        # The per-type "Download this file" link — distinguished from the
+        # id="download_data_zip" "Download all data" link, a separate
+        # element on the same page.
+        dl_xpath = ("//a[contains(@class,'shiny-download-link') "
+                   "and @id!='download_data_zip']")
+        dl_link = wait.until(EC.presence_of_element_located((By.XPATH, dl_xpath)))
+        dl_link.click()
+
+        deadline = time.time() + timeout
+        downloaded = None
+        while time.time() < deadline:
+            files = [f for f in os.listdir(tmp_dir) if not f.endswith(".crdownload")]
+            if files:
+                downloaded = os.path.join(tmp_dir, files[0])
+                break
+            time.sleep(0.5)
+        if not downloaded:
+            return None, "Download didn't complete in time — the app may be slow, or its layout changed"
+
+        if downloaded.lower().endswith(".zip"):
+            with zipfile.ZipFile(downloaded) as z:
+                data_files = [n for n in z.namelist() if n.lower().endswith((".csv",".txt",".tsv"))]
+                if not data_files:
+                    return None, "Downloaded zip had no CSV/TXT/TSV file inside"
+                with z.open(data_files[0]) as f:
+                    df = pd.read_csv(f, sep=None, engine="python")
+        else:
+            df = pd.read_csv(downloaded, sep=None, engine="python")
+    except Exception as e:
+        return None, f"DSDP (shinylaurel.com) fetch failed: {e}"
+    finally:
+        if driver is not None:
+            driver.quit()
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    if df is None or df.empty:
+        return None, "No data returned"
+    n_raw = len(df)
+    df = _restrict_to_request(df, expedition, site, hole)
+    if df.empty:
+        requested = ", ".join(f"{k}={v}" for k, v in
+                              [("Leg",expedition),("site",site),("hole",hole)] if v)
+        return None, f"Downloaded {n_raw:,} rows but none matched {requested}"
+    return df, None
 
 def find_depth_col(df):
     for c in df.columns:
@@ -1536,8 +1656,17 @@ for _ds in ["a","b"]:
                       f"match(es) for Leg {exp}:")
             return None, status, _pangaea_pick_list(ds, results)
 
+        # 3) PANGAEA has nothing either — try shinylaurel.com's DSDP archive,
+        #    but only for report types with a known matching category there
+        dsdp_type = SHINYLAUREL_DSDP_TYPES.get(report)
+        if dsdp_type:
+            df, err = fetch_dsdp_shinylaurel(dsdp_type, exp, site, hole)
+            if not err and df is not None and not df.empty:
+                status = f"✓ DSDP (shinylaurel.com)  {dsdp_type}  Leg {exp}  ({len(df):,} rows)"
+                return df2j(df), status, ""
+
         return (None,
-                f"No data found in LIMS/LORE or PANGAEA for Leg {exp}. Try Local file upload.",
+                f"No data found in LIMS/LORE, PANGAEA, or DSDP archive for Leg {exp}. Try Local file upload.",
                 "")
 
     @app.callback(
