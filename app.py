@@ -1084,11 +1084,11 @@ post_sidebar = html.Div([
                                      "color":"var(--muted)","letterSpacing":"3px"}),
     html.Div("Multi-dataset merge with depth tolerance matching.",
              style={"color":"var(--muted)","fontSize":"9px","marginBottom":"12px"}),
-    dataset_panel("a"),
-    dataset_panel("b"),
     html.P("VIEW MODE", style={**LBL,"marginTop":"0"}),
-    html.Div("Explore a single dataset on its own, or merge A + B by depth first.",
-             style={"color":"var(--muted)","fontSize":"9px","marginBottom":"6px"}),
+    html.Div("Explore a single dataset on its own, or merge A + B by depth first. "
+             "Set this before fetching if you only want one dataset — it's easy to "
+             "miss below a long Database/PANGAEA panel otherwise.",
+             style={"color":"var(--muted)","fontSize":"9px","marginBottom":"6px","lineHeight":"1.4"}),
     dcc.RadioItems(id="pe-view-mode", value="merged",
         options=[
             {"label": " Merged (A + B)",   "value": "merged"},
@@ -1099,6 +1099,8 @@ post_sidebar = html.Div([
                     "color":"var(--text)","fontSize":"11px","fontFamily":FONT},
         inputStyle={"marginRight":"6px","accentColor":"var(--accent)"}),
     html.Hr(style={"borderColor":"var(--border)","margin":"10px 0"}),
+    dataset_panel("a"),
+    dataset_panel("b"),
     html.P("MERGE SETTINGS", style={**LBL,"marginTop":"0"}),
     html.Div("Depth tolerance (cm)", style={"color":"var(--muted)","fontSize":"10px","marginBottom":"4px"}),
     dcc.Input(id="pe-tolerance", value="2", type="number", min=0, max=500, style=INP),
@@ -1803,9 +1805,15 @@ def pe_view_mode_ui(mode):
     Input("pe-active-store","data"),
 )
 def pe_axis_opts(da):
+    """Only offers numeric columns as chart axes. Plotting a depth track,
+    scatter, dual-axis, or rolling-mean chart from a text/categorical field
+    (sample comments, measurement units, lithology codes, etc.) produces a
+    meaningless chart — Plotly just assigns each unique string an arbitrary
+    integer position, which can look like a real depth trend but isn't one."""
     if not da: return [],[],[]
     df = j2df(da)
-    opts = [{"label":c,"value":c} for c in df.columns]
+    numeric_cols = df.select_dtypes(include="number").columns.tolist()
+    opts = [{"label":c,"value":c} for c in numeric_cols]
     return opts, opts, opts
 
 @app.callback(
