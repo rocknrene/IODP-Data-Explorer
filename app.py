@@ -15,6 +15,7 @@ import requests
 import numpy as np
 import pandas as pd
 import lasio
+from scipy import stats
 
 import plotly.graph_objects as go
 import plotly.express as px
@@ -98,7 +99,6 @@ LORE_REPORTS = {
 PREVIEW_REPORT = "gra"
 
 PANGAEA_ES      = "https://ws.pangaea.de/es/pangaea/panmd/_search"
-PANGAEA_DOI_DL  = "https://doi.pangaea.de/10.1594/PANGAEA.{pid}?format=textfile"
 
 HEADER_KEYWORDS = [
     "depth", "lith", "facies", "unit", "section", "sample", "core",
@@ -499,14 +499,21 @@ def fetch_lore(report_name, expedition, site="", hole=""):
         return None, str(e)
 
 def fetch_pangaea_doi(pangaea_id):
-    url = PANGAEA_DOI_DL.format(pid=pangaea_id)
+    """Downloads a PANGAEA dataset's tab-separated data table. PANGAEA wraps
+    its metadata (citation, parameters, license, etc.) in a C-style /* ... */
+    block comment ahead of the real table — not // line comments — confirmed
+    against the official pangaeapy client's own parsing logic. Requesting
+    with an explicit tab-separated-values Accept header (rather than a
+    ?format= query param) also matches that client and avoids an HTML
+    landing page being returned instead of the raw table."""
+    url = f"https://doi.pangaea.de/10.1594/PANGAEA.{pangaea_id}"
     try:
-        r = requests.get(url, timeout=60)
+        r = requests.get(url, timeout=60,
+                         headers={"Accept": "text/tab-separated-values"})
         r.raise_for_status()
-        text = r.text
-        lines = [l for l in text.splitlines() if not l.startswith("//")]
-        clean = "\n".join(lines)
-        df = pd.read_csv(io.StringIO(clean), sep="\t", skip_blank_lines=True)
+        clean = re.sub(r"/\*(.*)\*/", "", r.text, count=1, flags=re.DOTALL).strip()
+        df = pd.read_csv(io.StringIO(clean), sep="\t", skip_blank_lines=True,
+                         on_bad_lines="skip")
         df = df.dropna(axis=1, how="all").dropna(how="all").reset_index(drop=True)
         if df.empty:
             return None, "Dataset is empty or could not be parsed"
@@ -692,7 +699,7 @@ def get_expeditions_from_df(df):
 # =============================================================================
 def make_chart(df, ctype, x, y, color, curves,
                litho_df=None, show_gaps=True, show_qc=True, show_core_tops=True,
-               invert_y=True, theme="dark"):
+               invert_y=True, theme="dark", gap_threshold_m=5.0):
     t = THEMES.get(theme, THEMES["dark"])
     cfg = plot_cfg(theme)
     if ctype == "scatter" and x and y:
@@ -756,7 +763,7 @@ def make_chart(df, ctype, x, y, color, curves,
                 row=1, col=col_offset)
             col_offset += 1
         pal       = [t["accent"],t["accent2"],t["accent3"],"#bc8cff","#ff7b72"]
-        gaps      = find_recovery_gaps(df, x)  if show_gaps      else []
+        gaps      = find_recovery_gaps(df, x, gap_threshold_m) if show_gaps else []
         core_tops = extract_core_tops(df)       if show_core_tops else {}
         qc_col    = find_qc_col(df)             if show_qc        else None
         qc_depths = []
@@ -965,6 +972,20 @@ shipboard_sidebar = html.Div([
         labelStyle={"display":"block","marginBottom":"6px",
                     "color":"var(--text)","fontSize":"11px","fontFamily":FONT},
         inputStyle={"marginRight":"6px","accentColor":"var(--accent)"}),
+    html.Div("QC flag markers: a heuristic, not a validated QC method — it "
+             "flags any row where a column named *_Comment or *_comment is "
+             "non-empty, on the assumption that such fields were used to "
+             "note sample issues. Confirm that assumption holds for your file.",
+             style={"color":"var(--muted)","fontSize":"9px","marginTop":"2px",
+                    "marginBottom":"6px","lineHeight":"1.4"}),
+    html.Div("Gap threshold (m) — flags any two consecutive depth samples "
+             "farther apart than this as a recovery gap. 5 m is a reasonable "
+             "default for typical physical-property sampling spacing, not a "
+             "fixed rule — tighten it for closely-sampled data.",
+             style={"color":"var(--muted)","fontSize":"9px","marginTop":"6px",
+                    "marginBottom":"4px","lineHeight":"1.4"}),
+    dcc.Input(id="gap-threshold", type="number", value=5.0, min=0.1, step=0.1,
+              style=INP),
 
     # Y-axis invert toggle
     html.Hr(style={"borderColor":"var(--border)","margin":"14px 0"}),
@@ -1110,6 +1131,12 @@ post_sidebar = html.Div([
     ]),
     html.Div(id="pe-rolling-ctrl", style={"display":"none"}, children=[
         html.P("Rolling window (rows)", style={**LBL,"marginTop":"8px"}),
+        html.Div("Centered simple moving average over this many rows (not a "
+                 "depth interval — row spacing varies with sample density). "
+                 "Points within half a window of either end use a smaller, "
+                 "asymmetric window rather than being dropped.",
+                 style={"color":"var(--muted)","fontSize":"9px","marginBottom":"4px",
+                        "lineHeight":"1.4"}),
         dcc.Input(id="pe-rolling-window", value="20", type="number",
                   min=2, max=500, style=INP),
     ]),
@@ -1444,8 +1471,9 @@ def update_kpis(jdf, meta):
     Input("y-col","value"), Input("color-col","value"),
     Input("depth-curves","value"), Input("overlay-opts","value"),
     Input("axis-opts","value"), Input("theme-store","data"),
+    Input("gap-threshold","value"),
 )
-def update_chart(jdf, jlitho, ctype, x, y, color, curves, overlays, axis_opts, theme):
+def update_chart(jdf, jlitho, ctype, x, y, color, curves, overlays, axis_opts, theme, gap_threshold):
     """Rebuild chart on any control change; passes invert_y from axis-opts."""
     if not jdf: return empty_fig(theme=theme)
     overlays  = overlays  or []
@@ -1457,7 +1485,8 @@ def update_chart(jdf, jlitho, ctype, x, y, color, curves, overlays, axis_opts, t
                           show_gaps=("gaps" in overlays),
                           show_qc=("qc" in overlays),
                           show_core_tops=("core_tops" in overlays),
-                          invert_y=invert_y, theme=theme)
+                          invert_y=invert_y, theme=theme,
+                          gap_threshold_m=float(gap_threshold) if gap_threshold else 5.0)
     except Exception as e:
         t = THEMES.get(theme, THEMES["dark"])
         return empty_fig("Error: "+str(e), t["danger"], theme=theme)
@@ -1884,9 +1913,15 @@ def pe_chart(da, selected, xcol, ycols_a, ycols_b, mode, rwin, theme="dark"):
         try:
             m, b = np.polyfit(sub[xa].values, sub[xb].values, 1)
             x_r = np.linspace(sub[xa].min(), sub[xa].max(), 200)
-            r = np.corrcoef(sub[xa].values, sub[xb].values)[0, 1]
+            # Pearson r together with its own p-value and n, rather than a
+            # bare r — a correlation coefficient alone doesn't say whether
+            # it's likely real or an artifact of a small/scattered sample.
+            r, p = stats.pearsonr(sub[xa].values, sub[xb].values)
+            n = len(sub)
+            sig = "significant" if p < 0.05 else "not significant"
+            label = f"r={r:.3f}  r²={r**2:.3f}  n={n}  p={p:.2g} ({sig} at α=0.05)"
             fig.add_trace(go.Scatter(x=x_r, y=m*x_r+b, mode="lines",
-                                     name=f"r={r:.3f}",
+                                     name=label,
                                      line=dict(color=t["danger"], width=1.5, dash="dash")))
         except Exception:
             pass
