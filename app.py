@@ -10,6 +10,7 @@ import time
 import tempfile
 import shutil
 import zipfile
+import xml.etree.ElementTree as ET
 import requests
 
 import numpy as np
@@ -21,7 +22,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 
-from dash import Dash, dcc, html, Input, Output, State, dash_table, ctx, ALL
+from dash import Dash, dcc, html, Input, Output, State, dash_table, ctx, ALL, no_update
 import flask
 
 # =============================================================================
@@ -521,6 +522,27 @@ def fetch_pangaea_doi(pangaea_id):
     except Exception as e:
         return None, str(e)
 
+_PANGAEA_META_NS = {"md": "http://www.pangaea.de/MetaData"}
+
+def fetch_pangaea_title(pangaea_id, timeout=10):
+    """Fetches a dataset's real title from its metadata XML — confirmed
+    against the official pangaeapy client's own extraction logic (it reads
+    ./md:citation/md:title from the same doi.pangaea.de URL used for data,
+    just with a different Accept header). The ES search index's own 'title'
+    field is unreliable/often empty, especially for older legacy datasets
+    like the DSDP/ODP ones this app's PANGAEA fallback mostly surfaces —
+    which is why the pick list was showing bare DOI URLs instead of titles."""
+    try:
+        r = requests.get(f"https://doi.pangaea.de/10.1594/PANGAEA.{pangaea_id}",
+                         timeout=timeout,
+                         headers={"Accept": "application/vnd.pangaea.metadata+xml"})
+        r.raise_for_status()
+        root = ET.fromstring(r.text.encode())
+        title_el = root.find("./md:citation/md:title", _PANGAEA_META_NS)
+        return title_el.text.strip() if title_el is not None and title_el.text else None
+    except Exception:
+        return None
+
 def search_pangaea(query, count=10):
     body = {
         "query": {"query_string": {"query": query, "default_operator": "AND"}},
@@ -540,6 +562,14 @@ def search_pangaea(query, count=10):
             title = src.get("title", uri)
             if pid:
                 results.append({"label": f"{pid} — {str(title)[:60]}", "value": pid})
+        # The ES 'title' field above frequently falls back to the bare URI —
+        # fetch the real title for whichever results will actually be shown
+        # (capped, since this is one extra request per result and the pick
+        # list itself only ever displays the first 8).
+        for r_item in results[:8]:
+            real_title = fetch_pangaea_title(r_item["value"])
+            if real_title:
+                r_item["label"] = f"{r_item['value']} — {real_title[:70]}"
         return results, None
     except Exception as e:
         return [], str(e)
@@ -1776,6 +1806,24 @@ def pe_merge(n, da, db, dca, dcb, tol):
         return df2j(merged), status
     except Exception as e:
         return None, f"Merge error: {str(e)[:80]}"
+
+@app.callback(
+    Output("pe-view-mode","value"),
+    Input("pe-store-a","data"), Input("pe-store-b","data"),
+    prevent_initial_call=True,
+)
+def pe_view_mode_auto(da, db):
+    """Switches View Mode to whichever single dataset is actually loaded, so
+    loading just Dataset A shows it immediately instead of sitting on
+    'Merged' (which stays empty until both A and B exist and Merge is
+    clicked). Once both datasets have data, this stops touching the
+    setting — that's the point where 'Merged' vs 'A only' vs 'B only'
+    becomes a real, user-made choice rather than an obvious default."""
+    if da and not db:
+        return "a"
+    if db and not da:
+        return "b"
+    return no_update
 
 @app.callback(
     Output("pe-active-store","data"),
