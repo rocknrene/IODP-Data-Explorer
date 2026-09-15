@@ -80,6 +80,9 @@ LORE_REPORTS = {
     "shearstr":  "Vane Shear Strength",
     "xrf":       "Shore XRF Summary",
 }
+# GRA Bulk Density runs on nearly every core, so it doubles as a stand-in
+# report for previewing a Leg's sites/holes before a report is chosen.
+PREVIEW_REPORT = "gra"
 
 PANGAEA_ES      = "https://ws.pangaea.de/es/pangaea/panmd/_search"
 PANGAEA_DOI_DL  = "https://doi.pangaea.de/10.1594/PANGAEA.{pid}?format=textfile"
@@ -164,7 +167,7 @@ def parse_upload(contents, filename):
     fname  = filename.lower()
     meta   = {"filename": filename}
     try:
-        # FIX 6: Accept TSV files
+        # Accepts TSV as well as CSV
         if fname.endswith(".csv") or fname.endswith(".tsv"):
             sep = "\t" if fname.endswith(".tsv") else ","
             df = None
@@ -185,7 +188,7 @@ def parse_upload(contents, filename):
             if df is None:
                 return None, {"error": f"Could not decode {'TSV' if fname.endswith('.tsv') else 'CSV'}"}
             meta["format"] = "TSV" if fname.endswith(".tsv") else "CSV"
-            # FIX 1: Attach LIMS metadata if found
+            # Attach LIMS metadata if found
             if lims_meta:
                 meta["lims_meta"] = lims_meta
 
@@ -217,7 +220,7 @@ def parse_upload(contents, filename):
             try:    meta["well"] = las.well.WELL.value
             except: meta["well"] = ""
         else:
-            # FIX 6: Improved error message listing supported formats
+            # Error message lists supported formats
             return None, {"error": f"Unsupported file type: {filename}\nSupported formats: .csv, .tsv, .xlsx, .xls, .las"}
         meta.update(rows=len(df), cols=len(df.columns),
                     columns=list(df.columns),
@@ -287,7 +290,7 @@ def infer_site_meta(df, meta):
     info = {}
     cols_lower = {c.lower(): c for c in df.columns}
 
-    # FIX 1: Pull from LIMS-detected metadata first
+    # Pull from LIMS-detected metadata first
     lims_meta = meta.get("lims_meta", {})
     if lims_meta.get("expedition"):
         info["expedition"] = lims_meta["expedition"]
@@ -577,8 +580,8 @@ def get_expeditions_from_df(df):
 
 # =============================================================================
 # CHART BUILDER (SHIPBOARD TAB)
-# FIX 2: Y-axis inverted by default for depth plots
-# FIX 3: Layer toggles working (fixed trace visibility logic)
+# Y-axis inverted by default for depth plots
+# Each curve/layer has its own legendgroup so toggles work independently
 # =============================================================================
 def make_chart(df, ctype, x, y, color, curves,
                litho_df=None, show_gaps=True, show_qc=True, show_core_tops=True,
@@ -588,7 +591,7 @@ def make_chart(df, ctype, x, y, color, curves,
         fig = (px.scatter(df, x=x, y=y, color=cc, opacity=0.75)
                .update_traces(marker=dict(size=5))
                .update_layout(**PLOT_CFG))
-        # FIX 2: invert y-axis when depth is on Y
+        # Invert y-axis when depth is on Y
         if invert_y:
             fig.update_yaxes(autorange="reversed")
         return fig
@@ -653,7 +656,7 @@ def make_chart(df, ctype, x, y, color, curves,
             qc_depths = df.loc[qc_mask, x].dropna().tolist()
         for i, col in enumerate(sel):
             mask = df[col].notna() & df[x].notna()
-            # FIX 3: Each curve gets its own legendgroup so toggles actually work.
+            # Each curve gets its own legendgroup so its toggle only affects itself
             # Using legendgroup + legendgrouptitle ensures clicking the legend
             # entry hides/shows only that trace (and its QC/gap companions).
             fig.add_trace(go.Scatter(
@@ -694,7 +697,7 @@ def make_chart(df, ctype, x, y, color, curves,
                                        xanchor="left", yanchor="middle",
                                        row=1, col=col_offset+i)
         fig.update_yaxes(autorange="reversed", title_text=x, row=1, col=1)
-        # FIX 8: Use a fixed, scroll-safe height. The depth log now uses
+        # Fixed, scroll-safe height. The depth log uses
         # a constrained height so the controls below it remain accessible.
         cfg = {**PLOT_CFG, "height": 560}
         cfg.pop("xaxis",None); cfg.pop("yaxis",None)
@@ -755,14 +758,14 @@ app.index_string = """<!DOCTYPE html>
   .tab--selected { background-color:var(--bg)!important; color:var(--text)!important; }
   * { transition: background-color 0.25s, color 0.25s, border-color 0.25s; }
 
-  /* FIX 5: Data table independent scroll */
+  /* Data table scrolls independently of the page */
   .iodp-table-scroll {
     max-height: 320px;
     overflow-y: auto;
     overflow-x: auto;
   }
 
-  /* FIX 8: Depth log layout — prevent the chart from pushing controls off screen */
+  /* Depth log layout — keeps the chart from pushing controls off screen */
   .depthlog-graph-container {
     overflow: visible;
   }
@@ -785,7 +788,7 @@ TAB_SEL   = {**TAB_STYLE,"backgroundColor":C["bg"],"color":C["text"],
 # =============================================================================
 shipboard_sidebar = html.Div([
     html.P("DATA SOURCE", style=LBL),
-    # FIX 6: Updated upload box to list all accepted formats including .tsv
+    # Upload box lists all accepted formats including .tsv
     dcc.Upload(id="upload", multiple=False,
         children=html.Div([
             html.Div("↑", style={"fontSize":"26px","color":C["accent"]}),
@@ -796,7 +799,7 @@ shipboard_sidebar = html.Div([
         style={"border":f"2px dashed {C['border']}","borderRadius":"8px",
                "padding":"16px","cursor":"pointer","marginBottom":"10px"}),
 
-    # FIX 7: Clarify litho upload purpose — it layers on top, doesn't replace main data
+    # Litho upload layers on top of the main data — it doesn't replace it
     html.P("LITHO TRACK (optional, layers on chart)", style=LBL),
     html.Div("Upload a separate CSV/XLSX with top depth, bottom depth, and lithology columns. "
              "This adds a color-coded lithology lane to depth log view — it does not replace your main data file.",
@@ -854,7 +857,7 @@ shipboard_sidebar = html.Div([
                     "color":C["text"],"fontSize":"11px","fontFamily":FONT},
         inputStyle={"marginRight":"6px","accentColor":C["accent"]}),
 
-    # FIX 2: Y-axis invert toggle
+    # Y-axis invert toggle
     html.Hr(style={"borderColor":C["border"],"margin":"14px 0"}),
     html.P("AXIS OPTIONS", style=LBL),
     dcc.Checklist(id="axis-opts",
@@ -925,17 +928,17 @@ def dataset_panel(ds):
         html.Div(id=f"pe-{ds}-database-panel", children=[
             dcc.Input(id=f"pe-{ds}-lims-exp",  placeholder="Leg/Expedition (e.g. 344 or 118)",
                       debounce=True, style={**INP,"marginTop":"6px"}),
-            html.P("Report type (used if this leg is in LIMS/LORE)", style={**LBL,"marginTop":"6px"}),
-            dcc.Dropdown(id=f"pe-{ds}-report",
-                options=[{"label":v,"value":k} for k,v in LORE_REPORTS.items()],
-                placeholder="select report...", style=DD),
-            html.Div("Site and Hole populate below from what's actually in LIMS/LORE "
-                     "for this Leg + report — pick from the list, don't type a guess.",
+            html.Div("Site and Hole below populate as soon as this Leg is found in "
+                     "LIMS/LORE — pick from the list, don't type a guess.",
                      style={"color":C["muted"],"fontSize":"9px","marginTop":"6px","lineHeight":"1.4"}),
             dcc.Dropdown(id=f"pe-{ds}-lims-site", placeholder="Site — optional (all sites if blank)",
                          style={**DD,"marginTop":"4px"}),
             dcc.Dropdown(id=f"pe-{ds}-lims-hole", placeholder="Hole — optional (all holes if blank)",
                          style={**DD,"marginTop":"4px"}),
+            html.P("Report type (required to Fetch)", style={**LBL,"marginTop":"10px"}),
+            dcc.Dropdown(id=f"pe-{ds}-report",
+                options=[{"label":v,"value":k} for k,v in LORE_REPORTS.items()],
+                placeholder="select report...", style=DD),
             html.Button(f"Fetch {ds.upper()}", id=f"pe-fetch-{ds}-database",
                         n_clicks=0, style=BTN(accent)),
             html.Div(id=f"pe-{ds}-db-status",
@@ -1142,7 +1145,7 @@ def render_tab(tab):
                 ], style={"marginBottom":"12px"}),
 
                 dcc.Graph(id="pe-chart", config={"displayModeBar":True,"scrollZoom":True}),
-                # FIX 5: Post-expedition table also gets independent scroll
+                # Post-expedition table also scrolls independently
                 html.Div(id="pe-table-container",
                          className="iodp-table-scroll",
                          style={"marginTop":"16px","maxHeight":"320px","overflowY":"auto"}),
@@ -1334,7 +1337,7 @@ def update_kpis(jdf, meta):
     Input("axis-opts","value"),
 )
 def update_chart(jdf, jlitho, ctype, x, y, color, curves, overlays, axis_opts):
-    """Rebuild chart on any control change. FIX 2: passes invert_y from axis-opts."""
+    """Rebuild chart on any control change; passes invert_y from axis-opts."""
     if not jdf: return empty_fig()
     overlays  = overlays  or []
     axis_opts = axis_opts or []
@@ -1354,7 +1357,7 @@ def update_chart(jdf, jlitho, ctype, x, y, color, curves, overlays, axis_opts):
     Input("store-df","data"),
 )
 def update_table(jdf):
-    """FIX 5: Table rendered inside the iodp-table-scroll div for independent scrolling."""
+    """Table rendered inside the iodp-table-scroll div for independent scrolling."""
     if not jdf:
         return html.Div("No data loaded.",style={"color":C["muted"]}), ""
     df = j2df(jdf); preview = df.head(200)
@@ -1438,21 +1441,25 @@ for _ds in ["a","b"]:
         prevent_initial_call=True,
     )
     def pe_lookup(exp, report, ds=_ds):
-        """Pulls the whole Leg's report once (no site/hole filter) so Site and
-        Hole can be offered as dropdowns built only from what's really there —
-        instead of free-typed values that may not exist for this Leg."""
-        if not exp or not report:
+        """Pulls a Leg's report once (no site/hole filter) so Site and Hole
+        can be offered as dropdowns built only from what's really there —
+        instead of free-typed values that may not exist for this Leg. Runs
+        as soon as a Leg is entered, using PREVIEW_REPORT as a stand-in
+        until an actual report is chosen; re-runs against the real report
+        once one is picked, in case its site/hole coverage differs."""
+        if not exp:
             return None, [], None, [], None, ""
         exp = str(exp).strip()
-        df, err = fetch_lore(report, exp, "", "")
+        probe = report or PREVIEW_REPORT
+        df, err = fetch_lore(probe, exp, "", "")
         if err:
             return None, [], None, [], None, f"LIMS/LORE: {err[:100]}"
         site_col = _find_col(df, ["site"])
         sites = sorted(df[site_col].dropna().astype(str).unique().tolist()) if site_col else []
         hole_col = _find_col(df, ["hole"])
         holes = sorted(df[hole_col].dropna().astype(str).unique().tolist()) if hole_col else []
-        status = (f"Found {len(df):,} rows in LIMS/LORE for Leg {exp}"
-                  f"  ({len(sites)} site(s))" if sites else f"Found {len(df):,} rows in LIMS/LORE for Leg {exp}")
+        preview_note = "" if report else f"  — preview via {LORE_REPORTS[PREVIEW_REPORT]}, pick a report to fetch"
+        status = f"Found {len(df):,} rows in LIMS/LORE for Leg {exp}  ({len(sites)} site(s)){preview_note}"
         return (df2j(df),
                 [{"label":s,"value":s} for s in sites], None,
                 [{"label":h,"value":h} for h in holes], None,
@@ -1495,6 +1502,9 @@ for _ds in ["a","b"]:
         if not n or not exp:
             return None, "Enter a Leg/Expedition number", ""
         exp = str(exp).strip()
+
+        if not report:
+            return None, "Pick a report type, then Fetch — Site/Hole above are just a preview", ""
 
         # 1) Leg + report already looked up in LIMS/LORE — filter the cached
         #    raw fetch by whatever Site/Hole was picked (both real values,
