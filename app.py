@@ -10,6 +10,7 @@ import time
 import tempfile
 import shutil
 import zipfile
+import gzip
 import xml.etree.ElementTree as ET
 import requests
 
@@ -92,6 +93,57 @@ LITHO_COLORS = {
 def litho_color(name):
     return LITHO_COLORS.get(str(name).lower().strip(), "#444441")
 
+# ── Static Exp/Site/Hole reference table ─────────────────────────────────────
+# Every DSDP/ODP/IODP Leg-Site-Hole combination that has ever existed, plus
+# which program (DSDP/ODP/IODP) drilled it. IODP concluded in 2024, so this
+# list is now essentially fixed rather than something that goes stale.
+# Embedded directly (gzip+base64) rather than shipped as a separate CSV file,
+# so it can never go missing from a deploy the way requirements.txt has —
+# there's only one file to push. Powers the Exp/Site/Hole dropdowns so a
+# user can only ever pick a combination that's real, without waiting on a
+# live network round trip to find that out.
+_EXP_SITE_HOLE_BLOB = "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"
+
+def _load_exp_site_hole_ref():
+    try:
+        raw = gzip.decompress(base64.b64decode(_EXP_SITE_HOLE_BLOB))
+        df = pd.read_csv(io.BytesIO(raw), dtype=str)
+        return df
+    except Exception:
+        return pd.DataFrame(columns=["Exp","Site","Hole","program"])
+
+EXP_SITE_HOLE_REF = _load_exp_site_hole_ref()
+
+def _exp_sort_key(exp):
+    """Numeric-aware sort so Leg/Exp options read 1, 2, 3 ... 400, not the
+    lexicographic 1, 10, 100, 2, 200 ... a plain string sort would give."""
+    try:
+        return (0, float(exp))
+    except (TypeError, ValueError):
+        return (1, str(exp))
+
+ALL_EXPEDITIONS = sorted(EXP_SITE_HOLE_REF["Exp"].dropna().unique().tolist(), key=_exp_sort_key)
+
+def sites_for_exp(exp):
+    if not exp:
+        return []
+    sub = EXP_SITE_HOLE_REF[EXP_SITE_HOLE_REF["Exp"] == str(exp)]
+    return sorted(sub["Site"].dropna().unique().tolist(), key=_exp_sort_key)
+
+def holes_for_exp_site(exp, site):
+    if not exp or not site:
+        return []
+    sub = EXP_SITE_HOLE_REF[(EXP_SITE_HOLE_REF["Exp"] == str(exp)) &
+                            (EXP_SITE_HOLE_REF["Site"] == str(site))]
+    holes = sorted(sub["Hole"].dropna().unique().tolist())
+    return holes
+
+def hole_display_label(hole):
+    # "*" is this lab's own convention for legacy DSDP holes drilled before
+    # hole letters were standardized — it does not mean the letter was
+    # forgotten, it means there genuinely isn't one.
+    return "* (no hole letter — pre-dates hole lettering)" if hole == "*" else hole
+
 LORE_BASE = "http://web.iodp.tamu.edu/LORE/"
 LORE_REPORTS = {
     "gra":       "GRA Bulk Density",
@@ -103,9 +155,6 @@ LORE_REPORTS = {
     "shearstr":  "Vane Shear Strength",
     "xrf":       "Shore XRF Summary",
 }
-# GRA Bulk Density runs on nearly every core, so it doubles as a stand-in
-# report for previewing a Leg's sites/holes before a report is chosen.
-PREVIEW_REPORT = "gra"
 
 PANGAEA_ES      = "https://ws.pangaea.de/es/pangaea/panmd/_search"
 
@@ -1055,7 +1104,7 @@ def dataset_panel(ds):
     accent = "var(--accent)" if ds == "a" else "var(--accent3)"
     label  = "DATASET A" if ds == "a" else "DATASET B"
     repo_hint = html.Div([
-        html.Div("Enter a Leg/Expedition number — no need to know which archive it "
+        html.Div("Pick a Leg/Expedition — no need to know which archive it "
                  "lives in. Database mode checks LIMS/LORE first (JR expeditions, "
                  "317+), then falls back to PANGAEA (DSDP, ODP, and MSP expeditions).",
                  style={"color":"var(--muted)","fontSize":"9px","lineHeight":"1.4"}),
@@ -1094,10 +1143,12 @@ def dataset_panel(ds):
                      style={"fontSize":"10px","color":"var(--accent2)","marginTop":"4px"}),
         ]),
         html.Div(id=f"pe-{ds}-database-panel", children=[
-            dcc.Input(id=f"pe-{ds}-lims-exp",  placeholder="Leg/Expedition (e.g. 344 or 118)",
-                      debounce=True, style={**INP,"marginTop":"6px"}),
-            html.Div("Site and Hole below populate as soon as this Leg is found in "
-                     "LIMS/LORE — pick from the list, don't type a guess.",
+            dcc.Dropdown(id=f"pe-{ds}-lims-exp",
+                options=[{"label":e,"value":e} for e in ALL_EXPEDITIONS],
+                placeholder="Leg/Expedition — pick from the list", style=DD),
+            html.Div("Site and Hole populate from every known Leg/Site/Hole "
+                     "combination — not from a live lookup, so they're instant "
+                     "and don't depend on the data actually being in LIMS/LORE yet.",
                      style={"color":"var(--muted)","fontSize":"9px","marginTop":"6px","lineHeight":"1.4"}),
             dcc.Dropdown(id=f"pe-{ds}-lims-site", placeholder="Site — optional (all sites if blank)",
                          style={**DD,"marginTop":"4px"}),
@@ -1222,8 +1273,6 @@ app.layout = html.Div([
     dcc.Store(id="store-site-info", storage_type="session"),
     dcc.Store(id="pe-store-a"),
     dcc.Store(id="pe-store-b"),
-    dcc.Store(id="pe-a-lims-raw"),
-    dcc.Store(id="pe-b-lims-raw"),
     dcc.Store(id="pe-merged-store"),
     dcc.Store(id="pe-active-store"),
 
@@ -1611,61 +1660,32 @@ def _pangaea_pick_list(ds, results):
 
 for _ds in ["a","b"]:
     @app.callback(
-        Output(f"pe-{_ds}-lims-raw","data"),
         Output(f"pe-{_ds}-lims-site","options"), Output(f"pe-{_ds}-lims-site","value"),
         Output(f"pe-{_ds}-lims-hole","options",allow_duplicate=True),
         Output(f"pe-{_ds}-lims-hole","value",allow_duplicate=True),
-        Output(f"pe-{_ds}-db-status","children"),
-        Input(f"pe-{_ds}-lims-exp","value"), Input(f"pe-{_ds}-report","value"),
+        Input(f"pe-{_ds}-lims-exp","value"),
         prevent_initial_call=True,
     )
-    def pe_lookup(exp, report, ds=_ds):
-        """Pulls a Leg's report once (no site/hole filter) so Site and Hole
-        can be offered as dropdowns built only from what's really there —
-        instead of free-typed values that may not exist for this Leg. Runs
-        as soon as a Leg is entered, using PREVIEW_REPORT as a stand-in
-        until an actual report is chosen; re-runs against the real report
-        once one is picked, in case its site/hole coverage differs."""
-        if not exp:
-            return None, [], None, [], None, ""
-        exp = str(exp).strip()
-        probe = report or PREVIEW_REPORT
-        df, err = fetch_lore(probe, exp, "", "")
-        if err:
-            return None, [], None, [], None, f"LIMS/LORE: {err[:100]}"
-        site_col = _find_col(df, ["site"])
-        sites = sorted(df[site_col].dropna().astype(str).unique().tolist()) if site_col else []
-        hole_col = _find_col(df, ["hole"])
-        holes = sorted(df[hole_col].dropna().astype(str).unique().tolist()) if hole_col else []
-        preview_note = "" if report else f"  — preview via {LORE_REPORTS[PREVIEW_REPORT]}, pick a report to fetch"
-        status = f"Found {len(df):,} rows in LIMS/LORE for Leg {exp}  ({len(sites)} site(s)){preview_note}"
-        return (df2j(df),
-                [{"label":s,"value":s} for s in sites], None,
-                [{"label":h,"value":h} for h in holes], None,
-                status)
+    def pe_site_opts(exp, ds=_ds):
+        """Populates Site (and clears Hole, since it depends on Site) from
+        the static reference table — instant, and independent of whether
+        this Leg is actually reachable in LIMS/LORE or PANGAEA yet."""
+        sites = sites_for_exp(exp)
+        return [{"label":s,"value":s} for s in sites], None, [], None
 
     @app.callback(
         Output(f"pe-{_ds}-lims-hole","options",allow_duplicate=True),
         Output(f"pe-{_ds}-lims-hole","value",allow_duplicate=True),
         Input(f"pe-{_ds}-lims-site","value"),
-        State(f"pe-{_ds}-lims-raw","data"),
+        State(f"pe-{_ds}-lims-exp","value"),
         prevent_initial_call=True,
     )
-    def pe_hole_opts(site, raw, ds=_ds):
-        """Narrows the Hole dropdown to holes that actually exist for the
-        chosen Site, so an impossible Site+Hole combo can't be selected."""
-        if not raw:
-            return [], None
-        df = j2df(raw)
-        hole_col = _find_col(df, ["hole"])
-        if not hole_col:
-            return [], None
-        if site:
-            site_col = _find_col(df, ["site"])
-            if site_col:
-                df = df[df[site_col].astype(str) == str(site)]
-        holes = sorted(df[hole_col].dropna().astype(str).unique().tolist())
-        return [{"label":h,"value":h} for h in holes], None
+    def pe_hole_opts(site, exp, ds=_ds):
+        """Narrows Hole to whatever holes the reference table has for this
+        Leg + Site — including '*' for legacy DSDP holes drilled before hole
+        lettering existed, shown with a plain-language label."""
+        holes = holes_for_exp_site(exp, site)
+        return [{"label":hole_display_label(h),"value":h} for h in holes], None
 
     @app.callback(
         Output(f"pe-store-{_ds}","data",allow_duplicate=True),
@@ -1674,29 +1694,33 @@ for _ds in ["a","b"]:
         Input(f"pe-fetch-{_ds}-database","n_clicks"),
         State(f"pe-{_ds}-report","value"), State(f"pe-{_ds}-lims-exp","value"),
         State(f"pe-{_ds}-lims-site","value"), State(f"pe-{_ds}-lims-hole","value"),
-        State(f"pe-{_ds}-lims-raw","data"),
         prevent_initial_call=True,
     )
-    def pe_database_fetch(n, report, exp, site, hole, raw, ds=_ds):
+    def pe_database_fetch(n, report, exp, site, hole, ds=_ds):
         if not n or not exp:
             return None, "Enter a Leg/Expedition number", ""
         exp = str(exp).strip()
 
         if not report:
-            return None, "Pick a report type, then Fetch — Site/Hole above are just a preview", ""
+            return None, "Pick a report type, then Fetch", ""
 
-        # 1) Leg + report already looked up in LIMS/LORE — filter the cached
-        #    raw fetch by whatever Site/Hole was picked (both real values,
-        #    since the dropdowns only ever offer what's actually in the data).
-        if raw:
-            df = j2df(raw)
-            df = _restrict_to_request(df, exp, site, hole)
-            if not df.empty:
-                picked = ", ".join(f"{k}={v}" for k, v in [("site",site),("hole",hole)] if v)
-                status = (f"✓ LIMS/LORE  {LORE_REPORTS.get(report,report)}  Leg {exp}"
-                          f"{'  ('+picked+')' if picked else ''}  ({len(df):,} rows)")
-                return df2j(df), status, ""
-            return None, f"No rows matched site={site or 'any'}, hole={hole or 'any'} for Leg {exp}", ""
+        # "*" in the reference table means "this legacy DSDP hole predates
+        # hole lettering" (this lab's own convention) — it isn't a real hole
+        # code LIMS would recognize, so it must not be sent as a filter value.
+        lore_hole = "" if hole == "*" else (hole or "")
+
+        # 1) LIMS/LORE (JR expeditions, 317+). NOTE: LORE's public interface
+        # is a client-side single-page app — the page HTML it returns is an
+        # empty template with the real data fetched by its own internal
+        # JavaScript, not present in a plain HTTP response. A direct request
+        # like this one currently cannot retrieve real LORE data; it's left
+        # in place (and fails safely via the response-shape check in
+        # fetch_lore) so this fallback chain is ready to work again the
+        # moment that's fixed, likely via browser automation.
+        df, err = fetch_lore(report, exp, site or "", lore_hole)
+        if not err and df is not None and not df.empty:
+            status = f"✓ LIMS/LORE  {LORE_REPORTS.get(report,report)}  Leg {exp}  ({len(df):,} rows)"
+            return df2j(df), status, ""
 
         # 2) No LIMS/LORE data for this leg — fall back to PANGAEA (DSDP, then ODP)
         for project in ("DSDP", "ODP"):
