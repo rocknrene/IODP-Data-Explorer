@@ -156,8 +156,6 @@ LORE_REPORTS = {
     "xrf":       "Shore XRF Summary",
 }
 
-PANGAEA_ES      = "https://ws.pangaea.de/es/pangaea/panmd/_search"
-
 HEADER_KEYWORDS = [
     "depth", "lith", "facies", "unit", "section", "sample", "core",
     "upper", "lower", "top", "bottom", "description", "interval", "formation",
@@ -649,28 +647,30 @@ def fetch_pangaea_title(pangaea_id, timeout=10):
         return None
 
 def search_pangaea(query, count=10):
-    body = {
-        "query": {"query_string": {"query": query, "default_operator": "AND"}},
-        "size": count,
-        "_source": ["title", "URI"],
-    }
+    """Searches PANGAEA via its own documented search API — the same
+    endpoint PANGAEA's own website search box calls — confirmed against
+    the official pangaeapy client's PanQuery class and test suite. This
+    replaces querying the raw internal Elasticsearch cluster directly
+    (ws.pangaea.de/es/...), which is undocumented; that approach's exact
+    field names and query behavior were never confirmed and turned out to
+    only work by coincidence for specific queries, not reliably across
+    arbitrary Legs."""
     try:
-        r = requests.post(PANGAEA_ES, json=body, timeout=20,
-                          headers={"Content-Type": "application/json"})
+        r = requests.get("https://www.pangaea.de/advanced/search.php",
+                         params={"q": query, "count": count, "offset": 0},
+                         timeout=20)
         r.raise_for_status()
-        hits = r.json().get("hits", {}).get("hits", [])
+        hits = r.json().get("results", [])
         results = []
         for h in hits:
-            src   = h.get("_source", {})
-            uri   = src.get("URI", "")
-            pid   = uri.split(".")[-1] if uri else h.get("_id", "")
-            title = src.get("title", uri)
+            uri = h.get("URI", "")
+            pid = uri.split(".")[-1] if uri else ""
             if pid:
-                results.append({"label": f"{pid} — {str(title)[:60]}", "value": pid})
-        # The ES 'title' field above frequently falls back to the bare URI —
-        # fetch the real title for whichever results will actually be shown
-        # (capped, since this is one extra request per result and the pick
-        # list itself only ever displays the first 8).
+                results.append({"label": f"{pid} — {uri}", "value": pid})
+        # The search result itself only carries a display HTML snippet, not
+        # a clean title -- fetch the real title for whichever results will
+        # actually be shown (capped, since this is one extra request per
+        # result and the pick list itself only ever displays the first 8).
         for r_item in results[:8]:
             real_title = fetch_pangaea_title(r_item["value"])
             if real_title:
