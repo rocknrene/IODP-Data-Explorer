@@ -228,10 +228,32 @@ def detect_header_row(raw_bytes, encoding="utf-8", n_scan=30):
 # =============================================================================
 # FILE PARSING
 # =============================================================================
+def _parse_tabular_bytes(raw, fname):
+    """Parses CSV/TSV bytes — multi-encoding with LIMS metadata detection.
+    Used directly for .csv/.tsv uploads, and for whichever CSV/TSV member
+    gets selected out of a .zip upload."""
+    sep = "\t" if fname.lower().endswith(".tsv") else ","
+    df = None
+    lims_meta = {}
+    for enc in ["utf-8", "latin-1", "cp1252", "utf-16"]:
+        try:
+            header_row = detect_header_row(raw, encoding=enc)
+            # Try to grab LIMS metadata from rows above header
+            if header_row > 0:
+                lims_meta = extract_lims_metadata(raw, encoding=enc)
+            df = pd.read_csv(io.StringIO(raw.decode(enc)),
+                             header=header_row, skip_blank_lines=True,
+                             sep=sep)
+            df = df.dropna(axis=1, how="all").dropna(how="all").reset_index(drop=True)
+            break
+        except Exception:
+            continue
+    return df, lims_meta
+
 def parse_upload(contents, filename):
     """
     Decode a Dash-uploaded file and return (DataFrame, meta).
-    Now supports .csv, .tsv, .xlsx, .xls, .las
+    Supports .csv, .tsv, .xlsx, .xls, .las, .zip
     """
     _, b64 = contents.split(",")
     raw    = base64.b64decode(b64)
@@ -240,28 +262,54 @@ def parse_upload(contents, filename):
     try:
         # Accepts TSV as well as CSV
         if fname.endswith(".csv") or fname.endswith(".tsv"):
-            sep = "\t" if fname.endswith(".tsv") else ","
-            df = None
-            lims_meta = {}
-            for enc in ["utf-8", "latin-1", "cp1252", "utf-16"]:
-                try:
-                    header_row = detect_header_row(raw, encoding=enc)
-                    # Try to grab LIMS metadata from rows above header
-                    if header_row > 0:
-                        lims_meta = extract_lims_metadata(raw, encoding=enc)
-                    df = pd.read_csv(io.StringIO(raw.decode(enc)),
-                                     header=header_row, skip_blank_lines=True,
-                                     sep=sep)
-                    df = df.dropna(axis=1, how="all").dropna(how="all").reset_index(drop=True)
-                    break
-                except Exception:
-                    continue
+            df, lims_meta = _parse_tabular_bytes(raw, fname)
             if df is None:
                 return None, {"error": f"Could not decode {'TSV' if fname.endswith('.tsv') else 'CSV'}"}
             meta["format"] = "TSV" if fname.endswith(".tsv") else "CSV"
             # Attach LIMS metadata if found
             if lims_meta:
                 meta["lims_meta"] = lims_meta
+
+        elif fname.endswith(".zip"):
+            # Some archives (JAMSTEC's Chikyu J-CORES "Bulk Export" downloads
+            # in particular) hand back a .zip containing a bulk-*.csv plus
+            # attachment files, rather than a bare CSV/TSV. Pick whichever
+            # CSV/TSV member inside looks most like real tabular data.
+            try:
+                zf = zipfile.ZipFile(io.BytesIO(raw))
+            except Exception:
+                return None, {"error": f"Could not open {filename} — not a valid zip file"}
+            candidates = [n for n in zf.namelist()
+                         if n.lower().endswith((".csv",".tsv")) and "__MACOSX" not in n]
+            if not candidates:
+                listed = ", ".join(zf.namelist()[:10])
+                return None, {"error": f"No CSV/TSV file found inside {filename} — contains: {listed}"}
+            best_df, best_score, best_name, best_lims_meta = None, -1, None, {}
+            for name in candidates:
+                try:
+                    cand_df, cand_lims_meta = _parse_tabular_bytes(zf.read(name), name)
+                    if cand_df is None or cand_df.empty:
+                        continue
+                    score = sum(1 for col in cand_df.columns
+                                for kw in HEADER_KEYWORDS if kw in str(col).lower())
+                    # JAMSTEC's own "bulk.csv" / "bulk-<field>.csv" naming
+                    # convention is a strong signal for the main data table.
+                    if os.path.basename(name).lower().startswith("bulk"):
+                        score += 1
+                    if score > best_score:
+                        best_score, best_df, best_name, best_lims_meta = score, cand_df, name, cand_lims_meta
+                except Exception:
+                    continue
+            if best_df is None:
+                return None, {"error": f"Found {len(candidates)} CSV/TSV file(s) in {filename}, but none could be parsed"}
+            df = best_df
+            meta["format"] = "ZIP"
+            meta["zip_member"] = best_name
+            other = [n for n in candidates if n != best_name]
+            if other:
+                meta["zip_other_members"] = other[:10]
+            if best_lims_meta:
+                meta["lims_meta"] = best_lims_meta
 
         elif fname.endswith((".xlsx", ".xls")):
             best_df, best_score = None, -1
@@ -292,7 +340,7 @@ def parse_upload(contents, filename):
             except: meta["well"] = ""
         else:
             # Error message lists supported formats
-            return None, {"error": f"Unsupported file type: {filename}\nSupported formats: .csv, .tsv, .xlsx, .xls, .las"}
+            return None, {"error": f"Unsupported file type: {filename}\nSupported formats: .csv, .tsv, .xlsx, .xls, .las, .zip"}
         meta.update(rows=len(df), cols=len(df.columns),
                     columns=list(df.columns),
                     numeric_cols=df.select_dtypes(include="number").columns.tolist())
@@ -784,129 +832,150 @@ def get_expeditions_from_df(df):
 # Y-axis inverted by default for depth plots
 # Each curve/layer has its own legendgroup so toggles work independently
 # =============================================================================
+def _chart_scatter(df, x, y, color, cfg, invert_y):
+    cc = None if color in (None,"None","") else color
+    fig = (px.scatter(df, x=x, y=y, color=cc, opacity=0.75)
+           .update_traces(marker=dict(size=5))
+           .update_layout(**cfg))
+    # Invert y-axis when depth is on Y
+    if invert_y:
+        fig.update_yaxes(autorange="reversed")
+    return fig
+
+def _chart_line(df, x, y, cfg, invert_y):
+    fig = px.line(df, x=x, y=y).update_layout(**cfg)
+    if invert_y:
+        fig.update_yaxes(autorange="reversed")
+    return fig
+
+def _chart_histogram(df, x, cfg, t):
+    return (px.histogram(df, x=x, nbins=40,
+                         color_discrete_sequence=[t["accent"]])
+            .update_layout(**cfg))
+
+def _chart_heatmap(df, cfg):
+    nc = df.select_dtypes(include="number").columns.tolist()
+    if len(nc) < 2:
+        return empty_fig("Need 2+ numeric columns for heatmap")
+    corr = df[nc].corr().round(2)
+    return (px.imshow(corr, text_auto=True, aspect="auto",
+                      color_continuous_scale="RdBu_r", zmin=-1, zmax=1)
+            .update_layout(**cfg, height=420))
+
+def _chart_depthlog(df, x, curves, litho_df, show_gaps, show_qc, show_core_tops,
+                    cfg, t, gap_threshold_m):
+    sel = [c for c in curves if c in df.columns]
+    if not sel:
+        return empty_fig("No valid curves selected")
+    has_litho  = litho_df is not None and len(litho_df) > 0
+    all_labels = (["Litho"] if has_litho else []) + sel
+    raw_widths = [0.06 if l == "Litho" else 1.0 for l in all_labels]
+    total      = sum(raw_widths)
+    col_widths = [w/total for w in raw_widths]
+    fig = make_subplots(rows=1, cols=len(all_labels), shared_yaxes=True,
+                        subplot_titles=all_labels, column_widths=col_widths,
+                        horizontal_spacing=0.01)
+    col_offset = 1
+    if has_litho:
+        for _, row in litho_df.iterrows():
+            fig.add_shape(type="rect", x0=0, x1=1,
+                          y0=row["top_mbsf"], y1=row["bottom_mbsf"],
+                          fillcolor=litho_color(row.get("lithology","")),
+                          opacity=0.75, line_width=0, row=1, col=col_offset,
+                          xref=f"x{col_offset if col_offset>1 else ''} domain",
+                          yref="y")
+            fig.add_annotation(
+                x=0.5, y=(row["top_mbsf"]+row["bottom_mbsf"])/2,
+                text=str(row.get("lithology",""))[:6], showarrow=False,
+                font=dict(size=7, color="#ffffff"), textangle=-90,
+                xref=f"x{col_offset if col_offset>1 else ''} domain",
+                yref="y", row=1, col=col_offset)
+        fig.add_trace(go.Scatter(
+            x=[0.5,0.5],
+            y=[litho_df["top_mbsf"].min(), litho_df["bottom_mbsf"].max()],
+            mode="markers", marker_opacity=0, showlegend=False, name=""),
+            row=1, col=col_offset)
+        col_offset += 1
+    pal       = [t["accent"],t["accent2"],t["accent3"],"#bc8cff","#ff7b72"]
+    gaps      = find_recovery_gaps(df, x, gap_threshold_m) if show_gaps else []
+    core_tops = extract_core_tops(df)       if show_core_tops else {}
+    qc_col    = find_qc_col(df)             if show_qc        else None
+    qc_depths = []
+    if qc_col and qc_col in df.columns:
+        qc_mask   = df[qc_col].fillna("").astype(str).str.strip() != ""
+        qc_depths = df.loc[qc_mask, x].dropna().tolist()
+    for i, col in enumerate(sel):
+        mask = df[col].notna() & df[x].notna()
+        # Each curve gets its own legendgroup so its toggle only affects itself
+        # Using legendgroup + legendgrouptitle ensures clicking the legend
+        # entry hides/shows only that trace (and its QC/gap companions).
+        fig.add_trace(go.Scatter(
+            x=df.loc[mask,col], y=df.loc[mask,x], mode="lines", name=col,
+            line=dict(color=pal[i%len(pal)], width=1.5),
+            legendgroup=col, showlegend=True),
+            row=1, col=col_offset+i)
+        for gap_top, gap_bot in gaps:
+            fig.add_hrect(y0=gap_top, y1=gap_bot, fillcolor="#888780",
+                          opacity=0.18, line_width=0, row=1, col=col_offset+i,
+                          annotation_text="gap" if i==0 else "",
+                          annotation_font=dict(size=8, color=t["muted"]),
+                          annotation_position="top left")
+        if qc_depths:
+            qc_df = df.loc[df[x].isin(qc_depths) & df[col].notna()]
+            if len(qc_df):
+                fig.add_trace(go.Scatter(
+                    x=qc_df[col], y=qc_df[x], mode="markers",
+                    name="QC flagged", showlegend=(i==0),
+                    legendgroup="qc_flags",
+                    marker=dict(symbol="circle-open", size=8,
+                                color=t["danger"], line_width=1.5),
+                    hovertemplate="%{y:.2f} mbsf - QC flagged<extra></extra>"),
+                    row=1, col=col_offset+i)
+        if show_core_tops and i==0 and core_tops:
+            x_min   = df[col].min()
+            x_range = (df[col].max()-x_min) or 1
+            tick_end = x_min + x_range*0.12
+            for core_label, core_depth in core_tops.items():
+                fig.add_shape(type="line", x0=x_min, x1=tick_end,
+                              y0=core_depth, y1=core_depth,
+                              line=dict(color=t["warn"], width=0.8, dash="dot"),
+                              row=1, col=col_offset+i)
+                fig.add_annotation(x=tick_end, y=core_depth,
+                                   text=core_label.split("-")[-1],
+                                   showarrow=False,
+                                   font=dict(size=7, color=t["warn"]),
+                                   xanchor="left", yanchor="middle",
+                                   row=1, col=col_offset+i)
+    fig.update_yaxes(autorange="reversed", title_text=x, row=1, col=1)
+    # Fixed, scroll-safe height. The depth log uses
+    # a constrained height so the controls below it remain accessible.
+    depthlog_cfg = {**cfg, "height": 560}
+    depthlog_cfg.pop("xaxis",None); depthlog_cfg.pop("yaxis",None)
+    return fig.update_layout(showlegend=True,
+                             legend=dict(x=1.01,y=1,font=dict(size=10)),
+                             **depthlog_cfg)
+
 def make_chart(df, ctype, x, y, color, curves,
                litho_df=None, show_gaps=True, show_qc=True, show_core_tops=True,
                invert_y=True, theme="dark", gap_threshold_m=5.0):
+    """Dispatches to the builder for the selected chart type. Each chart
+    type has its own function (_chart_scatter, _chart_line, etc.) rather
+    than living as a branch inside one large function, so each builder has
+    a single, obvious job and can be read, tested, or changed on its own
+    without touching the others."""
     t = THEMES.get(theme, THEMES["dark"])
     cfg = plot_cfg(theme)
     if ctype == "scatter" and x and y:
-        cc = None if color in (None,"None","") else color
-        fig = (px.scatter(df, x=x, y=y, color=cc, opacity=0.75)
-               .update_traces(marker=dict(size=5))
-               .update_layout(**cfg))
-        # Invert y-axis when depth is on Y
-        if invert_y:
-            fig.update_yaxes(autorange="reversed")
-        return fig
+        return _chart_scatter(df, x, y, color, cfg, invert_y)
     if ctype == "line" and x and y:
-        fig = px.line(df, x=x, y=y).update_layout(**cfg)
-        if invert_y:
-            fig.update_yaxes(autorange="reversed")
-        return fig
+        return _chart_line(df, x, y, cfg, invert_y)
     if ctype == "histogram" and x:
-        return (px.histogram(df, x=x, nbins=40,
-                             color_discrete_sequence=[t["accent"]])
-                .update_layout(**cfg))
+        return _chart_histogram(df, x, cfg, t)
     if ctype == "heatmap":
-        nc = df.select_dtypes(include="number").columns.tolist()
-        if len(nc) < 2:
-            return empty_fig("Need 2+ numeric columns for heatmap")
-        corr = df[nc].corr().round(2)
-        return (px.imshow(corr, text_auto=True, aspect="auto",
-                          color_continuous_scale="RdBu_r", zmin=-1, zmax=1)
-                .update_layout(**cfg, height=420))
-
+        return _chart_heatmap(df, cfg)
     if ctype == "depthlog" and x and curves:
-        sel = [c for c in curves if c in df.columns]
-        if not sel:
-            return empty_fig("No valid curves selected")
-        has_litho  = litho_df is not None and len(litho_df) > 0
-        all_labels = (["Litho"] if has_litho else []) + sel
-        raw_widths = [0.06 if l == "Litho" else 1.0 for l in all_labels]
-        total      = sum(raw_widths)
-        col_widths = [w/total for w in raw_widths]
-        fig = make_subplots(rows=1, cols=len(all_labels), shared_yaxes=True,
-                            subplot_titles=all_labels, column_widths=col_widths,
-                            horizontal_spacing=0.01)
-        col_offset = 1
-        if has_litho:
-            for _, row in litho_df.iterrows():
-                fig.add_shape(type="rect", x0=0, x1=1,
-                              y0=row["top_mbsf"], y1=row["bottom_mbsf"],
-                              fillcolor=litho_color(row.get("lithology","")),
-                              opacity=0.75, line_width=0, row=1, col=col_offset,
-                              xref=f"x{col_offset if col_offset>1 else ''} domain",
-                              yref="y")
-                fig.add_annotation(
-                    x=0.5, y=(row["top_mbsf"]+row["bottom_mbsf"])/2,
-                    text=str(row.get("lithology",""))[:6], showarrow=False,
-                    font=dict(size=7, color="#ffffff"), textangle=-90,
-                    xref=f"x{col_offset if col_offset>1 else ''} domain",
-                    yref="y", row=1, col=col_offset)
-            fig.add_trace(go.Scatter(
-                x=[0.5,0.5],
-                y=[litho_df["top_mbsf"].min(), litho_df["bottom_mbsf"].max()],
-                mode="markers", marker_opacity=0, showlegend=False, name=""),
-                row=1, col=col_offset)
-            col_offset += 1
-        pal       = [t["accent"],t["accent2"],t["accent3"],"#bc8cff","#ff7b72"]
-        gaps      = find_recovery_gaps(df, x, gap_threshold_m) if show_gaps else []
-        core_tops = extract_core_tops(df)       if show_core_tops else {}
-        qc_col    = find_qc_col(df)             if show_qc        else None
-        qc_depths = []
-        if qc_col and qc_col in df.columns:
-            qc_mask   = df[qc_col].fillna("").astype(str).str.strip() != ""
-            qc_depths = df.loc[qc_mask, x].dropna().tolist()
-        for i, col in enumerate(sel):
-            mask = df[col].notna() & df[x].notna()
-            # Each curve gets its own legendgroup so its toggle only affects itself
-            # Using legendgroup + legendgrouptitle ensures clicking the legend
-            # entry hides/shows only that trace (and its QC/gap companions).
-            fig.add_trace(go.Scatter(
-                x=df.loc[mask,col], y=df.loc[mask,x], mode="lines", name=col,
-                line=dict(color=pal[i%len(pal)], width=1.5),
-                legendgroup=col, showlegend=True),
-                row=1, col=col_offset+i)
-            for gap_top, gap_bot in gaps:
-                fig.add_hrect(y0=gap_top, y1=gap_bot, fillcolor="#888780",
-                              opacity=0.18, line_width=0, row=1, col=col_offset+i,
-                              annotation_text="gap" if i==0 else "",
-                              annotation_font=dict(size=8, color=t["muted"]),
-                              annotation_position="top left")
-            if qc_depths:
-                qc_df = df.loc[df[x].isin(qc_depths) & df[col].notna()]
-                if len(qc_df):
-                    fig.add_trace(go.Scatter(
-                        x=qc_df[col], y=qc_df[x], mode="markers",
-                        name="QC flagged", showlegend=(i==0),
-                        legendgroup="qc_flags",
-                        marker=dict(symbol="circle-open", size=8,
-                                    color=t["danger"], line_width=1.5),
-                        hovertemplate="%{y:.2f} mbsf - QC flagged<extra></extra>"),
-                        row=1, col=col_offset+i)
-            if show_core_tops and i==0 and core_tops:
-                x_min   = df[col].min()
-                x_range = (df[col].max()-x_min) or 1
-                tick_end = x_min + x_range*0.12
-                for core_label, core_depth in core_tops.items():
-                    fig.add_shape(type="line", x0=x_min, x1=tick_end,
-                                  y0=core_depth, y1=core_depth,
-                                  line=dict(color=t["warn"], width=0.8, dash="dot"),
-                                  row=1, col=col_offset+i)
-                    fig.add_annotation(x=tick_end, y=core_depth,
-                                       text=core_label.split("-")[-1],
-                                       showarrow=False,
-                                       font=dict(size=7, color=t["warn"]),
-                                       xanchor="left", yanchor="middle",
-                                       row=1, col=col_offset+i)
-        fig.update_yaxes(autorange="reversed", title_text=x, row=1, col=1)
-        # Fixed, scroll-safe height. The depth log uses
-        # a constrained height so the controls below it remain accessible.
-        depthlog_cfg = {**cfg, "height": 560}
-        depthlog_cfg.pop("xaxis",None); depthlog_cfg.pop("yaxis",None)
-        return fig.update_layout(showlegend=True,
-                                 legend=dict(x=1.01,y=1,font=dict(size=10)),
-                                 **depthlog_cfg)
+        return _chart_depthlog(df, x, curves, litho_df, show_gaps, show_qc,
+                               show_core_tops, cfg, t, gap_threshold_m)
     return empty_fig("Select axes to plot")
 
 # =============================================================================
@@ -989,18 +1058,41 @@ TAB_SEL   = {**TAB_STYLE,"backgroundColor":"var(--bg)","color":"var(--text)",
 # =============================================================================
 # SHIPBOARD SIDEBAR LAYOUT
 # =============================================================================
+def upload_dropzone(comp_id, label, accepted, icon_size="18px",
+                    icon_color="var(--accent)", padding="10px",
+                    margin_bottom="4px", font_size="11px", compact=False):
+    """Shared dcc.Upload dropzone markup — used for the main data upload,
+    the litho overlay upload, and each Post-Expedition dataset's upload,
+    which previously each hand-wrote this same structure with only the
+    icon size/color, label text, and accepted-formats caption differing.
+    compact=True drops the icon and uses the tighter border/background
+    style the Post-Expedition dataset panels use, to fit their narrower
+    sidebar column."""
+    if compact:
+        return dcc.Upload(id=comp_id, multiple=False,
+            children=html.Div([
+                html.Div(label, style={"color":"var(--muted)","fontSize":"11px","textAlign":"center"}),
+                html.Div(f"Accepted: {accepted}",
+                         style={"color":"var(--muted)","fontSize":"9px","textAlign":"center","marginTop":"2px"}),
+            ], style={"padding":"10px 0"}),
+            style={"border":"1px dashed var(--border)","borderRadius":"6px",
+                   "backgroundColor":"var(--bg)","cursor":"pointer","marginTop":"6px"})
+    return dcc.Upload(id=comp_id, multiple=False,
+        children=html.Div([
+            html.Div("↑", style={"fontSize":icon_size,"color":icon_color}),
+            html.Div(label),
+            html.Div(f"Accepted: {accepted}",
+                     style={"color":"var(--muted)","fontSize":"9px","marginTop":"2px"}),
+        ], style={"textAlign":"center","color":"var(--text)","fontSize":font_size}),
+        style={"border":"2px dashed var(--border)","borderRadius":"8px",
+               "padding":padding,"cursor":"pointer","marginBottom":margin_bottom})
+
 shipboard_sidebar = html.Div([
     html.P("DATA SOURCE", style=LBL),
     # Upload box lists all accepted formats including .tsv
-    dcc.Upload(id="upload", multiple=False,
-        children=html.Div([
-            html.Div("↑", style={"fontSize":"26px","color":"var(--accent)"}),
-            html.Div("Drop file or click to upload"),
-            html.Div("Accepted: .csv  .tsv  .xlsx  .las",
-                     style={"color":"var(--muted)","fontSize":"10px","marginTop":"3px"}),
-        ], style={"textAlign":"center","color":"var(--text)","fontSize":"12px"}),
-        style={"border":f"2px dashed var(--border)","borderRadius":"8px",
-               "padding":"16px","cursor":"pointer","marginBottom":"10px"}),
+    upload_dropzone("upload", "Drop file or click to upload",
+                    ".csv  .tsv  .xlsx  .las  .zip",
+                    icon_size="26px", padding="16px", margin_bottom="10px", font_size="12px"),
 
     # Litho upload layers on top of the main data — it doesn't replace it
     html.P("LITHO TRACK (optional, layers on chart)", style=LBL),
@@ -1008,15 +1100,9 @@ shipboard_sidebar = html.Div([
              "This adds a color-coded lithology lane to depth log view — it does not replace your main data file.",
              style={"color":"var(--muted)","fontSize":"9px","marginBottom":"4px","fontFamily":FONT,
                     "lineHeight":"1.4"}),
-    html.Div("Accepted: .csv  .tsv  .xlsx",
-             style={"color":"var(--muted)","fontSize":"9px","marginBottom":"6px","fontFamily":FONT}),
-    dcc.Upload(id="upload-litho", multiple=False,
-        children=html.Div([
-            html.Div("↑", style={"fontSize":"18px","color":"var(--accent3)"}),
-            html.Div("Drop litho file or click"),
-        ], style={"textAlign":"center","color":"var(--text)","fontSize":"11px"}),
-        style={"border":f"2px dashed var(--border)","borderRadius":"8px",
-               "padding":"10px","cursor":"pointer","marginBottom":"4px"}),
+    upload_dropzone("upload-litho", "Drop litho file or click",
+                    ".csv  .tsv  .xlsx  .zip",
+                    icon_color="var(--accent3)"),
     html.Div(id="litho-badge"),
 
     html.Hr(style={"borderColor":"var(--border)","margin":"14px 0"}),
@@ -1130,15 +1216,8 @@ def dataset_panel(ds):
             inputStyle={"marginRight":"6px","accentColor":accent},
         ),
         html.Div(id=f"pe-{ds}-upload-panel", style={"display":"none"}, children=[
-            dcc.Upload(id=f"pe-{ds}-upload", multiple=False,
-                children=html.Div([
-                    html.Div("Drop file or click to upload",
-                             style={"color":"var(--muted)","fontSize":"11px","textAlign":"center"}),
-                    html.Div("Accepted: .csv  .tsv  .xlsx  .las",
-                             style={"color":"var(--muted)","fontSize":"9px","textAlign":"center","marginTop":"2px"}),
-                ], style={"padding":"10px 0"}),
-                style={"border":f"1px dashed var(--border)","borderRadius":"6px",
-                       "backgroundColor":"var(--bg)","cursor":"pointer","marginTop":"6px"}),
+            upload_dropzone(f"pe-{ds}-upload", "Drop file or click to upload",
+                            ".csv  .tsv  .xlsx  .las  .zip", compact=True),
             html.Div(id=f"pe-{ds}-upload-status",
                      style={"fontSize":"10px","color":"var(--accent2)","marginTop":"4px"}),
         ]),
@@ -1622,25 +1701,24 @@ for _ds in ["a","b"]:
         db = {}  if src=="database" else {"display":"none"}
         return up, db
 
-@app.callback(
-    Output("pe-store-a","data"), Output("pe-a-upload-status","children"),
-    Input("pe-a-upload","contents"), State("pe-a-upload","filename"),
-    prevent_initial_call=True,
-)
-def pe_load_a_upload(contents, filename):
-    df, meta = parse_upload(contents, filename)
-    if "error" in meta: return None, f"Error: {meta['error']}"
-    return df2j(df), f"✓ {filename}  ({len(df):,} rows)"
+def _upload_status_msg(filename, df, meta):
+    msg = f"✓ {filename}  ({len(df):,} rows)"
+    if meta.get("zip_member"):
+        msg += f"  — using {meta['zip_member']} from the zip"
+        if meta.get("zip_other_members"):
+            msg += f" ({len(meta['zip_other_members'])} other CSV/TSV file(s) in the zip were not used)"
+    return msg
 
-@app.callback(
-    Output("pe-store-b","data"), Output("pe-b-upload-status","children"),
-    Input("pe-b-upload","contents"), State("pe-b-upload","filename"),
-    prevent_initial_call=True,
-)
-def pe_load_b_upload(contents, filename):
-    df, meta = parse_upload(contents, filename)
-    if "error" in meta: return None, f"Error: {meta['error']}"
-    return df2j(df), f"✓ {filename}  ({len(df):,} rows)"
+for _ds in ["a","b"]:
+    @app.callback(
+        Output(f"pe-store-{_ds}","data"), Output(f"pe-{_ds}-upload-status","children"),
+        Input(f"pe-{_ds}-upload","contents"), State(f"pe-{_ds}-upload","filename"),
+        prevent_initial_call=True,
+    )
+    def pe_load_upload(contents, filename):
+        df, meta = parse_upload(contents, filename)
+        if "error" in meta: return None, f"Error: {meta['error']}"
+        return df2j(df), _upload_status_msg(filename, df, meta)
 
 def _pangaea_pick_list(ds, results):
     """Clickable list of PANGAEA matches — each button fetches that dataset."""
