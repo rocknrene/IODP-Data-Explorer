@@ -737,35 +737,55 @@ def search_pangaea_legacy(leg, project="DSDP", report_keyword=None, count=15):
 
 DSDP_SHINYLAUREL_URL = "https://shinylaurel.com/shiny/DSDP_data_access/"
 
-# shinylaurel.com's DSDP_data_access app organizes legacy DSDP data by its own
-# category vocabulary (paleontology/lithology-style labels), not by LORE's
-# physical-property report codes — so only report types with a confident,
-# known match are wired up here. Extend this once the app's full category
-# list (it's a long alphabetical button list) has been confirmed.
+# shinylaurel.com's DSDP_data_access app organizes legacy DSDP data by its
+# own category vocabulary (paleontology/lithology/method-based labels), not
+# by LORE's physical-property report codes. Mapped from the app's full
+# "Data by Type" button list (confirmed directly, not guessed) to whichever
+# LORE_REPORTS type it's the clear real-world equivalent of:
+#   - "gamma ray attenuation" IS GRA — the same measurement LORE calls
+#     GRA Bulk Density, just under DSDP-era terminology.
+#   - "sonic velocity" is DSDP/ODP-era terminology for P-wave velocity.
+#   - "vane shear" is the direct equivalent of LORE's Vane Shear Strength.
+#   - "density and porosity" is the closest match for MAD (Moisture and
+#     Density), though MAD also reports moisture content that this
+#     category may not fully cover.
+# Natural Gamma Radiation, Thermal Conductivity, WRMSL (multi-sensor), and
+# Shore XRF Summary have no confident match in the list (X-ray diffraction
+# categories are XRD — mineralogy — not XRF's elemental geochemistry, a
+# different technique) and are deliberately left unmapped rather than
+# guessed at; those report types still fall through to PANGAEA for DSDP Legs.
 SHINYLAUREL_DSDP_TYPES = {
-    "mad": "density and porosity",
+    "gra":      "gamma ray attenuation",
+    "mad":      "density and porosity",
+    "pwave":    "sonic velocity",
+    "shearstr": "vane shear",
 }
 
 def fetch_dsdp_shinylaurel(data_type_label, expedition, site="", hole="", timeout=45):
     """Drives shinylaurel.com's DSDP_data_access Shiny app the way a browser
-    would, since the app has no stable download API — its download link is
-    scoped to a single live session (see the app's rendered HTML: the href
-    is 'session/<random-token>/download/...', good only for that one
-    browser session). Selects the given data type under the app's
-    'Data by Type' tab, downloads the resulting file, then filters it
-    locally to the requested Leg/Site/Hole, since the app hands back every
-    Leg for that data type in one table rather than letting you query by Leg.
+    would, since the app has no stable download API. Uses the app's
+    "Data by Site" tab, which — confirmed directly from the page's HTML
+    source — exposes real <select> dropdowns for Leg (#var1), Site (#var2,
+    multi-select, populated dynamically once Leg is chosen), and Data type
+    (#var_data, all 43 categories enumerated in the initial page). This
+    lets the query be scoped to the actual requested Leg + Site up front,
+    rather than downloading every Leg for a data type and filtering
+    locally (the app's other tab, "Data by Type", only supports the
+    latter). The download link (#download_site_data) starts disabled —
+    confirmed via the page's shinyjs enable/disable handlers — and the
+    server enables it with a real href once a full Leg + Site + Data type
+    selection has been made.
 
     NOTE: this has not been exercised against the live site — this sandbox
     has no network path to shinylaurel.com and no Chromium binary to run
-    Selenium at all, so this is built from the app's rendered HTML rather
-    than a live test. Expect to need at least one round of fixes once this
-    actually runs on the deployed Space.
+    Selenium at all, so this is built from the app's actual rendered HTML
+    (not from guessing) but still untested end-to-end. Expect to need at
+    least one round of fixes once this actually runs on the deployed Space.
     """
     try:
         from selenium import webdriver
         from selenium.webdriver.common.by import By
-        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support.ui import WebDriverWait, Select
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.chrome.service import Service
         from selenium.webdriver.chrome.options import Options
@@ -797,21 +817,56 @@ def fetch_dsdp_shinylaurel(data_type_label, expedition, site="", hole="", timeou
         wait = WebDriverWait(driver, timeout)
 
         driver.get(DSDP_SHINYLAUREL_URL)
-        wait.until(EC.element_to_be_clickable((By.LINK_TEXT, "Data by Type"))).click()
+        wait.until(EC.element_to_be_clickable(
+            (By.CSS_SELECTOR, "a[data-value='bysite']"))).click()
 
-        type_btn_xpath = (
-            "//div[@id='button_list_datapreview']"
-            f"//button[normalize-space(text())='{data_type_label}']"
-        )
-        wait.until(EC.element_to_be_clickable((By.XPATH, type_btn_xpath))).click()
+        # Leg (#var1) — a plain single-select, DSDP Legs 1-96
+        leg_select = Select(wait.until(EC.presence_of_element_located((By.ID, "var1"))))
+        leg_select.select_by_value(str(expedition))
 
-        # The per-type "Download this file" link — distinguished from the
-        # id="download_data_zip" "Download all data" link, a separate
-        # element on the same page.
-        dl_xpath = ("//a[contains(@class,'shiny-download-link') "
-                   "and @id!='download_data_zip']")
-        dl_link = wait.until(EC.presence_of_element_located((By.XPATH, dl_xpath)))
-        dl_link.click()
+        # Site (#var2) starts as a single "placeholder1" option until the
+        # server responds to the Leg selection — wait for it to actually
+        # refresh before touching it.
+        def _sites_loaded(d):
+            opts = Select(d.find_element(By.ID, "var2")).options
+            return len(opts) >= 1 and opts[0].get_attribute("value") != "placeholder1"
+        wait.until(_sites_loaded)
+
+        if site:
+            site_select = Select(driver.find_element(By.ID, "var2"))
+            # #var2 is a multi-select — select_by_value() ADDS to whatever
+            # is already selected rather than replacing it, and the app's
+            # default selection state after a Leg change isn't known, so
+            # clear it explicitly first to guarantee only the requested
+            # site ends up selected.
+            site_select.deselect_all()
+            try:
+                site_select.select_by_value(site)
+            except Exception:
+                pass  # requested site not in the live list — leave default selection
+        else:
+            # No site requested — explicitly select every available site,
+            # rather than relying on whatever the app's own default
+            # selection happens to be.
+            site_select = Select(driver.find_element(By.ID, "var2"))
+            for opt in site_select.options:
+                val = opt.get_attribute("value")
+                if val:
+                    site_select.select_by_value(val)
+
+        # Data type (#var_data) — values are the exact category strings
+        # confirmed from the page source (e.g. "gamma ray attenuation").
+        data_select = Select(driver.find_element(By.ID, "var_data"))
+        data_select.select_by_value(data_type_label)
+
+        # The download link is disabled until the server has a complete,
+        # valid selection to build a file from.
+        def _download_enabled(d):
+            link = d.find_element(By.ID, "download_site_data")
+            return "disabled" not in (link.get_attribute("class") or "")
+        wait.until(_download_enabled)
+
+        driver.find_element(By.ID, "download_site_data").click()
 
         deadline = time.time() + timeout
         downloaded = None
@@ -843,6 +898,10 @@ def fetch_dsdp_shinylaurel(data_type_label, expedition, site="", hole="", timeou
     if df is None or df.empty:
         return None, "No data returned"
     n_raw = len(df)
+    # Site/Leg were already scoped in the request itself, but this stays as
+    # a safety net (and still applies Hole filtering, which the site's own
+    # form doesn't offer) in case the site's download includes more than
+    # was actually asked for.
     df = _restrict_to_request(df, expedition, site, hole)
     if df.empty:
         requested = ", ".join(f"{k}={v}" for k, v in
@@ -1866,12 +1925,24 @@ for _ds in ["a","b"]:
                 status = f"✓ LIMS/LORE  {LORE_REPORTS.get(report,report)}  Leg {exp}  ({len(df):,} rows)"
                 return df2j(df), status, ""
 
-        # 2) PANGAEA — only the project tag that actually matches this
-        #    Leg's real program/vessel, per the reference table above.
-        #    report_keyword narrows toward the requested measurement type
-        #    (without it, this returns every dataset type that Leg has —
-        #    core photos, XRD protocols, geochemistry, etc.)
         report_keyword = PANGAEA_REPORT_KEYWORDS.get(report)
+
+        # 2) For DSDP-era Legs, shinylaurel.com's DSDP archive is the
+        # preferred source — PANGAEA is a fallback for it, not the other
+        # way around, since DSDP data specifically should come from
+        # shinylaurel.com when a report type it covers is available there.
+        dsdp_type = SHINYLAUREL_DSDP_TYPES.get(report)
+        if try_dsdp and dsdp_type:
+            df, err = fetch_dsdp_shinylaurel(dsdp_type, exp, site, hole)
+            if not err and df is not None and not df.empty:
+                status = f"✓ DSDP (shinylaurel.com)  {dsdp_type}  Leg {exp}  ({len(df):,} rows)"
+                return df2j(df), status, ""
+
+        # 3) PANGAEA — ODP always (shinylaurel doesn't cover ODP), DSDP only
+        #    as a fallback when shinylaurel has no mapping for this report
+        #    type or came up empty. report_keyword narrows toward the
+        #    requested measurement type (without it, this returns every
+        #    dataset type that Leg has — core photos, XRD protocols, etc.)
         projects_to_try = []
         if try_dsdp: projects_to_try.append("DSDP")
         if try_odp:  projects_to_try.append("ODP")
@@ -1889,7 +1960,7 @@ for _ds in ["a","b"]:
                       f"match(es) for Leg {exp} ({LORE_REPORTS.get(report,report)}):")
             return None, status, _pangaea_pick_list(ds, results)
 
-        # 2b) MSP (Mission Specific Platform) expeditions are IODP-era but
+        # 3b) MSP (Mission Specific Platform) expeditions are IODP-era but
         # not JR-operated, and are archived on PANGAEA without a DSDP/ODP
         # project tag — search by Leg/Expedition number alone instead.
         if try_msp:
@@ -1907,15 +1978,6 @@ for _ds in ["a","b"]:
                 status = (f"Not found in LIMS/LORE — {len(results)} PANGAEA "
                           f"match(es) for Expedition {exp}:")
                 return None, status, _pangaea_pick_list(ds, results)
-
-        # 3) shinylaurel.com's DSDP archive, only for DSDP-era Legs and only
-        #    for report types with a known matching category there
-        dsdp_type = SHINYLAUREL_DSDP_TYPES.get(report)
-        if dsdp_type and try_dsdp:
-            df, err = fetch_dsdp_shinylaurel(dsdp_type, exp, site, hole)
-            if not err and df is not None and not df.empty:
-                status = f"✓ DSDP (shinylaurel.com)  {dsdp_type}  Leg {exp}  ({len(df):,} rows)"
-                return df2j(df), status, ""
 
         source_note = ""
         if vessel == "JOIDES Resolution" and program == "IODP":
