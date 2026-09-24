@@ -735,6 +735,66 @@ def search_pangaea_legacy(leg, project="DSDP", report_keyword=None, count=15):
         query += f" {report_keyword}"
     return search_pangaea(query, count=count)
 
+NGDC_DSDP_BASE = "https://www.ngdc.noaa.gov/mgg/geology/data/glomar_challenger/all_dsdp_data_by_type/"
+
+# NCEI/NGDC's internal file-name codes for each DSDP "by data type" flat
+# file, and which LORE_REPORTS key each is the real-world equivalent of.
+# Confirmed directly from Laurel's own team's published reference data
+# (shinylaurel/LIMS2_dsdp_NGDClinks_dt.csv on GitHub — the file their own
+# LIMS2 app uses to link to NGDC), not guessed. "grape" is literally the
+# historic instrument name GRA is short for; "density" is DSDP-era MAD;
+# "sonic" is DSDP-era P-wave velocity; "vane" is vane shear strength.
+# Natural Gamma Radiation, Thermal Conductivity, WRMSL (multi-sensor), and
+# Shore XRF Summary have no code in that reference file either — those
+# instruments largely postdate DSDP, so the absence is a real fact about
+# what DSDP measured, not a gap in this mapping.
+NGDC_DSDP_FILE_CODES = {
+    "gra":      "grape",
+    "mad":      "density",
+    "pwave":    "sonic",
+    "shearstr": "vane",
+}
+
+def fetch_dsdp_ngdc(file_code, expedition, site="", hole="", timeout=30):
+    """Downloads a DSDP 'by data type' flat file directly from NCEI/NGDC's
+    static archive — a plain file per data type covering every DSDP Leg,
+    no Shiny app or browser session involved. Tried before the
+    Selenium-driven shinylaurel.com fetch since a plain HTTP request is
+    far simpler and faster when it works.
+
+    NOTE: shinylaurel.com's own page states this NCEI hosting was
+    "unavailable for download" as of July 2026, so this endpoint may
+    currently be down — if it fails, the caller falls back to
+    shinylaurel.com. The exact column delimiter of these files hasn't
+    been confirmed either, so several common ones are tried in turn."""
+    url = f"{NGDC_DSDP_BASE}{file_code}.txt"
+    try:
+        r = requests.get(url, timeout=timeout,
+                         headers={"User-Agent": "Mozilla/5.0 (research script)"})
+        r.raise_for_status()
+        text = r.text
+        df = None
+        for sep in ["\t", r"\s{2,}", ","]:
+            try:
+                candidate = pd.read_csv(io.StringIO(text), sep=sep, engine="python")
+                if candidate.shape[1] > 1:
+                    df = candidate
+                    break
+            except Exception:
+                continue
+        if df is None or df.empty:
+            return None, "Downloaded file but couldn't parse its column layout"
+    except Exception as e:
+        return None, f"NGDC fetch failed: {e}"
+
+    n_raw = len(df)
+    df = _restrict_to_request(df, expedition, site, hole)
+    if df.empty:
+        requested = ", ".join(f"{k}={v}" for k, v in
+                              [("Leg",expedition),("site",site),("hole",hole)] if v)
+        return None, f"Downloaded {n_raw:,} rows but none matched {requested}"
+    return df, None
+
 DSDP_SHINYLAUREL_URL = "https://shinylaurel.com/shiny/DSDP_data_access/"
 
 # shinylaurel.com's DSDP_data_access app organizes legacy DSDP data by its
@@ -1927,11 +1987,20 @@ for _ds in ["a","b"]:
 
         report_keyword = PANGAEA_REPORT_KEYWORDS.get(report)
 
-        # 2) For DSDP-era Legs, shinylaurel.com's DSDP archive is the
-        # preferred source — PANGAEA is a fallback for it, not the other
-        # way around, since DSDP data specifically should come from
-        # shinylaurel.com when a report type it covers is available there.
-        dsdp_type = SHINYLAUREL_DSDP_TYPES.get(report)
+        # 2) For DSDP-era Legs: try NGDC's direct static file first (a
+        # plain HTTP request — fast and simple when it works), then
+        # shinylaurel.com's Selenium-driven site as a fallback if NGDC's
+        # hosting is down (its own site suggests it may be, as of last
+        # check). PANGAEA is the fallback for both, not the primary DSDP
+        # source, since DSDP data specifically should come from these two
+        # sources when they cover the requested report type.
+        ngdc_code  = NGDC_DSDP_FILE_CODES.get(report)
+        dsdp_type  = SHINYLAUREL_DSDP_TYPES.get(report)
+        if try_dsdp and ngdc_code:
+            df, err = fetch_dsdp_ngdc(ngdc_code, exp, site, hole)
+            if not err and df is not None and not df.empty:
+                status = f"✓ DSDP (NGDC)  {ngdc_code}  Leg {exp}  ({len(df):,} rows)"
+                return df2j(df), status, ""
         if try_dsdp and dsdp_type:
             df, err = fetch_dsdp_shinylaurel(dsdp_type, exp, site, hole)
             if not err and df is not None and not df.empty:
