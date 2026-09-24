@@ -172,6 +172,21 @@ LORE_REPORTS = {
     "shearstr":  "Vane Shear Strength",
     "xrf":       "Shore XRF Summary",
 }
+# Search terms likely to appear in a PANGAEA dataset's own title/citation for
+# each measurement type — without these, a PANGAEA search only narrows by
+# Leg and project, and returns whatever dataset types exist for that Leg
+# (core photos, XRD protocols, geochemistry, ...) regardless of which
+# physical property was actually requested.
+PANGAEA_REPORT_KEYWORDS = {
+    "gra":       "GRA bulk density",
+    "mad":       "moisture density MAD",
+    "pwave":     "P-wave velocity",
+    "ngr":       "natural gamma radiation",
+    "thermcond": "thermal conductivity",
+    "wrmsr":     "multisensor track MSCL",
+    "shearstr":  "shear strength",
+    "xrf":       "XRF",
+}
 
 HEADER_KEYWORDS = [
     "depth", "lith", "facies", "unit", "section", "sample", "core",
@@ -696,18 +711,28 @@ def search_pangaea(query, count=10):
     except Exception as e:
         return [], str(e)
 
-def search_pangaea_legacy(leg, project="DSDP", count=15):
+def search_pangaea_legacy(leg, project="DSDP", report_keyword=None, count=15):
     """Search PANGAEA for legacy DSDP/ODP shipboard datasets tied to a Leg
     number. PANGAEA's Elasticsearch endpoint is documented (and used by its
     own R client, pangaear) as a plain free-text 'q=' search — not a
     structured match against specific field names like campaign.label,
     which was this function's original approach and returned zero hits
     for every Leg since those field names were never confirmed to exist.
-    Reuses search_pangaea()'s proven free-text query for the same reason."""
+    Reuses search_pangaea()'s proven free-text query for the same reason.
+
+    report_keyword narrows results toward the actual measurement type asked
+    for (e.g. "GRA bulk density"). Without it, this only narrows by Leg and
+    project, and returns whatever dataset types happen to exist for that
+    Leg — core photos, XRD protocols, geochemistry, etc. — regardless of
+    which physical property was actually requested. This is still a
+    free-text relevance search, not a strict filter, so it narrows results
+    rather than guaranteeing only matching-type datasets come back."""
     if project == "DSDP":
         query = f'"Leg {leg}" DSDP'
     else:  # ODP shipboard party datasets
         query = f'"Leg {leg}" "Shipboard Scientific Party"'
+    if report_keyword:
+        query += f" {report_keyword}"
     return search_pangaea(query, count=count)
 
 DSDP_SHINYLAUREL_URL = "https://shinylaurel.com/shiny/DSDP_data_access/"
@@ -1843,11 +1868,15 @@ for _ds in ["a","b"]:
 
         # 2) PANGAEA — only the project tag that actually matches this
         #    Leg's real program/vessel, per the reference table above.
+        #    report_keyword narrows toward the requested measurement type
+        #    (without it, this returns every dataset type that Leg has —
+        #    core photos, XRD protocols, geochemistry, etc.)
+        report_keyword = PANGAEA_REPORT_KEYWORDS.get(report)
         projects_to_try = []
         if try_dsdp: projects_to_try.append("DSDP")
         if try_odp:  projects_to_try.append("ODP")
         for project in projects_to_try:
-            results, err = search_pangaea_legacy(exp, project)
+            results, err = search_pangaea_legacy(exp, project, report_keyword=report_keyword)
             if err or not results:
                 continue
             if len(results) == 1:
@@ -1857,14 +1886,17 @@ for _ds in ["a","b"]:
                     status = f"✓ PANGAEA {project}  {pid}  Leg {exp}  ({len(df):,} rows)"
                     return df2j(df), status, ""
             status = (f"Not found in LIMS/LORE — {len(results)} PANGAEA {project} "
-                      f"match(es) for Leg {exp}:")
+                      f"match(es) for Leg {exp} ({LORE_REPORTS.get(report,report)}):")
             return None, status, _pangaea_pick_list(ds, results)
 
         # 2b) MSP (Mission Specific Platform) expeditions are IODP-era but
         # not JR-operated, and are archived on PANGAEA without a DSDP/ODP
         # project tag — search by Leg/Expedition number alone instead.
         if try_msp:
-            results, err = search_pangaea(f'"Expedition {exp}"')
+            msp_query = f'"Expedition {exp}"'
+            if report_keyword:
+                msp_query += f" {report_keyword}"
+            results, err = search_pangaea(msp_query)
             if not err and results:
                 if len(results) == 1:
                     pid = results[0]["value"]
