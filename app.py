@@ -768,6 +768,18 @@ def _rank_pangaea_by_leg_match(results, leg):
     pattern = _leg_match_pattern(leg)
     return sorted(results, key=lambda r: 0 if _matches_leg(r, pattern) else 1)
 
+def _kw_matches(label_lower, kw_lower):
+    """Tolerates simple singular/plural mismatches (e.g. a PANGAEA title
+    saying "Diatom stratigraphy" when the keyword is "diatoms") — an
+    exact-substring check alone would wrongly treat that as a non-match."""
+    if not kw_lower:
+        return True
+    if kw_lower in label_lower:
+        return True
+    if kw_lower.endswith("s") and kw_lower[:-1] in label_lower:
+        return True
+    return False
+
 def search_pangaea_legacy(leg, project="DSDP", report_keyword=None, count=15):
     """Search PANGAEA for legacy DSDP/ODP shipboard datasets tied to a Leg
     number. PANGAEA's Elasticsearch endpoint is documented (and used by its
@@ -818,27 +830,23 @@ def search_pangaea_legacy(leg, project="DSDP", report_keyword=None, count=15):
 
     pattern = _leg_match_pattern(leg)
     kw_lower = report_keyword.lower() if report_keyword else None
-    def kw_matches(label_lower):
-        if not kw_lower:
-            return True
-        # Tolerate simple singular/plural mismatches (e.g. a PANGAEA title
-        # saying "Diatom stratigraphy" when the keyword is "diatoms") —
-        # an exact-substring check alone would wrongly treat that as a
-        # non-match and rank a genuinely relevant result no higher than
-        # an irrelevant one.
-        if kw_lower in label_lower:
-            return True
-        if kw_lower.endswith("s") and kw_lower[:-1] in label_lower:
-            return True
-        return False
     def score(r):
         leg_ok = _matches_leg(r, pattern)
-        kw_ok = kw_matches(r.get("label","").lower())
+        kw_ok = _kw_matches(r.get("label","").lower(), kw_lower)
         if leg_ok and kw_ok: return 0
         if leg_ok:           return 1
         if kw_ok:            return 2
         return 3
     ranked = sorted(merged.values(), key=score)
+
+    if report_keyword and not any(_kw_matches(r.get("label","").lower(), kw_lower) for r in ranked):
+        # Nothing found even loosely confirms the requested measurement
+        # type — showing the merely Leg-confirmed results anyway would
+        # present unrelated data (e.g. carbon analyses, manganese deposits)
+        # as if they were candidates for what was actually asked for. Say
+        # plainly that nothing was found rather than offering a guess.
+        return [], None
+
     return ranked[:count], None
 
 NGDC_DSDP_BASE = "https://www.ngdc.noaa.gov/mgg/geology/data/glomar_challenger/all_dsdp_data_by_type/"
@@ -2204,6 +2212,12 @@ for _ds in ["a","b"]:
             results, err = search_pangaea(msp_query)
             if results:
                 results = _rank_pangaea_by_leg_match(results, exp)
+                if report_keyword and not any(
+                    _kw_matches(r.get("label","").lower(), report_keyword.lower()) for r in results
+                ):
+                    # Same honesty check as search_pangaea_legacy — nothing
+                    # here actually confirms the requested measurement type.
+                    results = []
             if not err and results:
                 if len(results) == 1:
                     pid = results[0]["value"]
