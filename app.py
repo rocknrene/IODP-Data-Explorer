@@ -172,6 +172,34 @@ LORE_REPORTS = {
     "shearstr":  "Vane Shear Strength",
     "xrf":       "Shore XRF Summary",
 }
+# DSDP-native data types with no LIMS/LORE equivalent — DSDP predates LORE
+# entirely, and most of these (paleontology, lithology, core description)
+# were never part of LORE's physical-property report vocabulary in the
+# first place. Keyed by the exact category string shinylaurel.com's own
+# dropdown uses, confirmed directly from that app's page source, so no
+# separate label mapping is needed for the Selenium/shinylaurel path.
+DSDP_NATIVE_REPORTS = {k: k.title().replace("Ucr", "UCR") for k in [
+    "age assignments", "algae", "alternating field demagnetization",
+    "ammonite", "aptychi", "archaeomonads", "benthic foraminifera",
+    "bryozoans", "calcispherulides", "carbonate and carbon",
+    "core description - hard rock", "core description - screen, sediments",
+    "core description - visual, sediments", "crinoids", "depth and recovery",
+    "diatoms", "dinoflagellates", "ebridians and actiniscaceae",
+    "fish debris", "grain size distribution", "interstitial water",
+    "major element analyses - hard rock",
+    "minor and trace element analyses - hard rock", "nannofossils",
+    "ostracods", "phytolitharia", "planktonic foraminifera", "pollen",
+    "radiolarians", "rhyncollites", "rock magnetic measurements",
+    "rock magnetic measurements - curie", "silicoflagellates",
+    "site summary", "smear slides", "spinner magnetometer",
+    "spinner magnetometer (long-core)", "trace fossils",
+    "x-ray diffraction - other labs, bulk", "x-ray diffraction - other labs, clay",
+    "x-ray diffraction - other labs, silt", "x-ray diffraction - UCR, bulk",
+    "x-ray diffraction - UCR, clay", "x-ray diffraction - UCR, silt",
+]}
+# The combined list the Report type dropdown actually offers.
+ALL_REPORT_TYPES = {**LORE_REPORTS, **DSDP_NATIVE_REPORTS}
+
 # Search terms likely to appear in a PANGAEA dataset's own title/citation for
 # each measurement type — without these, a PANGAEA search only narrows by
 # Leg and project, and returns whatever dataset types exist for that Leg
@@ -186,6 +214,10 @@ PANGAEA_REPORT_KEYWORDS = {
     "wrmsr":     "multisensor track MSCL",
     "shearstr":  "shear strength",
     "xrf":       "XRF",
+    # DSDP-native categories reuse their own label text as the search
+    # keyword — a reasonable default since PANGAEA search is free-text
+    # anyway, though not individually curated the way the LORE keys above are.
+    **{k: k for k in DSDP_NATIVE_REPORTS},
 }
 
 HEADER_KEYWORDS = [
@@ -711,6 +743,17 @@ def search_pangaea(query, count=10):
     except Exception as e:
         return [], str(e)
 
+def _rank_pangaea_by_leg_match(results, leg):
+    """Re-sorts PANGAEA search results so entries that actually name this
+    Leg/Hole outrank ones that only loosely match on keywords. PANGAEA's
+    own relevance ranking doesn't reliably do this — a dataset from a
+    completely different Leg that happens to share more keywords (e.g.
+    "bulk density") can rank above an exact match for the requested Leg
+    that uses more specific terminology (e.g. "GRAPE ... Hole 1-4")."""
+    leg_str = str(leg).strip()
+    pattern = re.compile(rf'\b(?:Leg|Hole|Expedition)\s*{re.escape(leg_str)}[\s\-,]', re.IGNORECASE)
+    return sorted(results, key=lambda r: 0 if pattern.search(r.get("label","")) else 1)
+
 def search_pangaea_legacy(leg, project="DSDP", report_keyword=None, count=15):
     """Search PANGAEA for legacy DSDP/ODP shipboard datasets tied to a Leg
     number. PANGAEA's Elasticsearch endpoint is documented (and used by its
@@ -733,26 +776,78 @@ def search_pangaea_legacy(leg, project="DSDP", report_keyword=None, count=15):
         query = f'"Leg {leg}" "Shipboard Scientific Party"'
     if report_keyword:
         query += f" {report_keyword}"
-    return search_pangaea(query, count=count)
+    results, err = search_pangaea(query, count=count)
+    if results:
+        results = _rank_pangaea_by_leg_match(results, leg)
+    return results, err
 
 NGDC_DSDP_BASE = "https://www.ngdc.noaa.gov/mgg/geology/data/glomar_challenger/all_dsdp_data_by_type/"
 
 # NCEI/NGDC's internal file-name codes for each DSDP "by data type" flat
-# file, and which LORE_REPORTS key each is the real-world equivalent of.
+# file, and which report type each is the real-world equivalent of.
 # Confirmed directly from Laurel's own team's published reference data
 # (shinylaurel/LIMS2_dsdp_NGDClinks_dt.csv on GitHub — the file their own
-# LIMS2 app uses to link to NGDC), not guessed. "grape" is literally the
-# historic instrument name GRA is short for; "density" is DSDP-era MAD;
-# "sonic" is DSDP-era P-wave velocity; "vane" is vane shear strength.
-# Natural Gamma Radiation, Thermal Conductivity, WRMSL (multi-sensor), and
-# Shore XRF Summary have no code in that reference file either — those
-# instruments largely postdate DSDP, so the absence is a real fact about
-# what DSDP measured, not a gap in this mapping.
+# LIMS2 app uses to link to NGDC), not guessed. The four LORE-equivalent
+# codes: "grape" is literally the historic instrument name GRA is short
+# for; "density" is DSDP-era MAD; "sonic" is DSDP-era P-wave velocity;
+# "vane" is vane shear strength. Natural Gamma Radiation, Thermal
+# Conductivity, WRMSL (multi-sensor), and Shore XRF Summary have no code
+# in that reference file — those instruments largely postdate DSDP, so the
+# absence is a real fact about what DSDP measured, not a gap in this
+# mapping. The remaining entries map DSDP-native categories (matched by
+# their exact shinylaurel.com dropdown label) to that same reference
+# file's codes. Two categories are left unmapped rather than guessed:
+# "rock magnetic measurements" has both an "hr_mag" and a separate,
+# more specific "dsed_mag" code with no clear way to tell which the UI
+# category corresponds to, and "spinner magnetometer (long-core)" has no
+# distinct code from plain "spinner magnetometer" in the reference file.
 NGDC_DSDP_FILE_CODES = {
     "gra":      "grape",
     "mad":      "density",
     "pwave":    "sonic",
     "shearstr": "vane",
+    "age assignments":                            "ageprof",
+    "algae":                                      "algae",
+    "alternating field demagnetization":          "afd_mag",
+    "ammonite":                                   "ammonite",
+    "aptychi":                                    "aptychi",
+    "archaeomonads":                              "archaeom",
+    "benthic foraminifera":                       "b_forams",
+    "bryozoans":                                  "bryozoan",
+    "calcispherulides":                           "cspherul",
+    "carbonate and carbon":                       "carbon",
+    "core description - hard rock":               "hr_desc",
+    "core description - screen, sediments":       "screen",
+    "core description - visual, sediments":       "vistxt",
+    "crinoids":                                   "crinoids",
+    "depth and recovery":                         "coredep",
+    "diatoms":                                    "diatoms",
+    "dinoflagellates":                            "dinoflag",
+    "ebridians and actiniscaceae":                "ebri_act",
+    "fish debris":                                "fish_deb",
+    "grain size distribution":                    "grain",
+    "interstitial water":                         "water",
+    "major element analyses - hard rock":         "hr_major",
+    "minor and trace element analyses - hard rock": "hr_minor",
+    "nannofossils":                               "nannos",
+    "ostracods":                                  "ostracod",
+    "phytolitharia":                              "phyliths",
+    "planktonic foraminifera":                    "p_forams",
+    "pollen":                                     "pollen",
+    "radiolarians":                               "radiolar",
+    "rhyncollites":                               "rhyncoll",
+    "rock magnetic measurements - curie":         "hr_mag_curie",
+    "silicoflagellates":                          "siliflag",
+    "site summary":                               "sitesum",
+    "smear slides":                               "smear",
+    "spinner magnetometer":                       "spin_mag",
+    "trace fossils":                              "trfossil",
+    "x-ray diffraction - other labs, bulk":       "xrw_bulk",
+    "x-ray diffraction - other labs, clay":       "xrw_clay",
+    "x-ray diffraction - other labs, silt":       "xrw_silt",
+    "x-ray diffraction - UCR, bulk":              "xrd_bulk",
+    "x-ray diffraction - UCR, clay":              "xrd_clay",
+    "x-ray diffraction - UCR, silt":              "xrd_silt",
 }
 
 def fetch_dsdp_ngdc(file_code, expedition, site="", hole="", timeout=30):
@@ -799,9 +894,8 @@ DSDP_SHINYLAUREL_URL = "https://shinylaurel.com/shiny/DSDP_data_access/"
 
 # shinylaurel.com's DSDP_data_access app organizes legacy DSDP data by its
 # own category vocabulary (paleontology/lithology/method-based labels), not
-# by LORE's physical-property report codes. Mapped from the app's full
-# "Data by Type" button list (confirmed directly, not guessed) to whichever
-# LORE_REPORTS type it's the clear real-world equivalent of:
+# by LORE's physical-property report codes. The four LORE-equivalent keys
+# map to their real-world shinylaurel.com equivalent:
 #   - "gamma ray attenuation" IS GRA — the same measurement LORE calls
 #     GRA Bulk Density, just under DSDP-era terminology.
 #   - "sonic velocity" is DSDP/ODP-era terminology for P-wave velocity.
@@ -810,15 +904,19 @@ DSDP_SHINYLAUREL_URL = "https://shinylaurel.com/shiny/DSDP_data_access/"
 #     Density), though MAD also reports moisture content that this
 #     category may not fully cover.
 # Natural Gamma Radiation, Thermal Conductivity, WRMSL (multi-sensor), and
-# Shore XRF Summary have no confident match in the list (X-ray diffraction
-# categories are XRD — mineralogy — not XRF's elemental geochemistry, a
-# different technique) and are deliberately left unmapped rather than
-# guessed at; those report types still fall through to PANGAEA for DSDP Legs.
+# Shore XRF Summary have no confident match (X-ray diffraction categories
+# are XRD — mineralogy — not XRF's elemental geochemistry, a different
+# technique) and are deliberately left out rather than guessed at; those
+# report types still fall through to PANGAEA for DSDP Legs. Every
+# DSDP-native report key already IS the exact shinylaurel.com dropdown
+# value (confirmed from that app's page source), so those just map to
+# themselves.
 SHINYLAUREL_DSDP_TYPES = {
     "gra":      "gamma ray attenuation",
     "mad":      "density and porosity",
     "pwave":    "sonic velocity",
     "shearstr": "vane shear",
+    **{k: k for k in DSDP_NATIVE_REPORTS},
 }
 
 def fetch_dsdp_shinylaurel(data_type_label, expedition, site="", hole="", timeout=45):
@@ -1396,7 +1494,7 @@ def dataset_panel(ds):
                          style={**DD,"marginTop":"4px"}),
             html.P("Report type (required to Fetch)", style={**LBL,"marginTop":"10px"}),
             dcc.Dropdown(id=f"pe-{ds}-report",
-                options=[{"label":v,"value":k} for k,v in LORE_REPORTS.items()],
+                options=[{"label":v,"value":k} for k,v in ALL_REPORT_TYPES.items()],
                 placeholder="select report...", style=DD),
             html.Button(f"Fetch {ds.upper()}", id=f"pe-fetch-{ds}-database",
                         n_clicks=0, style=BTN(accent)),
@@ -1982,7 +2080,7 @@ for _ds in ["a","b"]:
         if try_lore:
             df, err = fetch_lore(report, exp, site or "", lore_hole)
             if not err and df is not None and not df.empty:
-                status = f"✓ LIMS/LORE  {LORE_REPORTS.get(report,report)}  Leg {exp}  ({len(df):,} rows)"
+                status = f"✓ LIMS/LORE  {ALL_REPORT_TYPES.get(report,report)}  Leg {exp}  ({len(df):,} rows)"
                 return df2j(df), status, ""
 
         report_keyword = PANGAEA_REPORT_KEYWORDS.get(report)
@@ -1993,19 +2091,26 @@ for _ds in ["a","b"]:
         # hosting is down (its own site suggests it may be, as of last
         # check). PANGAEA is the fallback for both, not the primary DSDP
         # source, since DSDP data specifically should come from these two
-        # sources when they cover the requested report type.
-        ngdc_code  = NGDC_DSDP_FILE_CODES.get(report)
-        dsdp_type  = SHINYLAUREL_DSDP_TYPES.get(report)
+        # sources when they cover the requested report type. Their actual
+        # error messages are kept (not discarded) so that if this ends up
+        # falling through to PANGAEA anyway, the status says why instead
+        # of silently hiding that NGDC/shinylaurel were ever tried.
+        ngdc_code    = NGDC_DSDP_FILE_CODES.get(report)
+        dsdp_type    = SHINYLAUREL_DSDP_TYPES.get(report)
+        dsdp_notes   = []
         if try_dsdp and ngdc_code:
             df, err = fetch_dsdp_ngdc(ngdc_code, exp, site, hole)
             if not err and df is not None and not df.empty:
                 status = f"✓ DSDP (NGDC)  {ngdc_code}  Leg {exp}  ({len(df):,} rows)"
                 return df2j(df), status, ""
+            dsdp_notes.append(f"NGDC ({ngdc_code}): {err or 'no data returned'}")
         if try_dsdp and dsdp_type:
             df, err = fetch_dsdp_shinylaurel(dsdp_type, exp, site, hole)
             if not err and df is not None and not df.empty:
                 status = f"✓ DSDP (shinylaurel.com)  {dsdp_type}  Leg {exp}  ({len(df):,} rows)"
                 return df2j(df), status, ""
+            dsdp_notes.append(f"shinylaurel.com ({dsdp_type}): {err or 'no data returned'}")
+        dsdp_note_str = ("  [" + "; ".join(dsdp_notes) + "]") if dsdp_notes else ""
 
         # 3) PANGAEA — ODP always (shinylaurel doesn't cover ODP), DSDP only
         #    as a fallback when shinylaurel has no mapping for this report
@@ -2023,10 +2128,10 @@ for _ds in ["a","b"]:
                 pid = results[0]["value"]
                 df, ferr = fetch_pangaea_doi(pid)
                 if not ferr and df is not None and not df.empty:
-                    status = f"✓ PANGAEA {project}  {pid}  Leg {exp}  ({len(df):,} rows)"
+                    status = f"✓ PANGAEA {project}  {pid}  Leg {exp}  ({len(df):,} rows){dsdp_note_str}"
                     return df2j(df), status, ""
             status = (f"Not found in LIMS/LORE — {len(results)} PANGAEA {project} "
-                      f"match(es) for Leg {exp} ({LORE_REPORTS.get(report,report)}):")
+                      f"match(es) for Leg {exp} ({ALL_REPORT_TYPES.get(report,report)}){dsdp_note_str}:")
             return None, status, _pangaea_pick_list(ds, results)
 
         # 3b) MSP (Mission Specific Platform) expeditions are IODP-era but
@@ -2037,6 +2142,8 @@ for _ds in ["a","b"]:
             if report_keyword:
                 msp_query += f" {report_keyword}"
             results, err = search_pangaea(msp_query)
+            if results:
+                results = _rank_pangaea_by_leg_match(results, exp)
             if not err and results:
                 if len(results) == 1:
                     pid = results[0]["value"]
@@ -2052,7 +2159,7 @@ for _ds in ["a","b"]:
         if vessel == "JOIDES Resolution" and program == "IODP":
             source_note = " (LIMS/LORE is the right source for this Leg, but can't be reached automatically yet)"
         return (None,
-                f"No data found for Leg {exp}{source_note}. Try Local file upload.",
+                f"No data found for Leg {exp}{source_note}{dsdp_note_str}. Try Local file upload.",
                 "")
 
     @app.callback(
