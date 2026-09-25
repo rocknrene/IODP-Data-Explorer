@@ -743,6 +743,13 @@ def search_pangaea(query, count=10):
     except Exception as e:
         return [], str(e)
 
+def _leg_match_pattern(leg):
+    leg_str = str(leg).strip()
+    return re.compile(rf'\b(?:Leg|Hole|Expedition)\s*{re.escape(leg_str)}[\s\-,]', re.IGNORECASE)
+
+def _matches_leg(result, pattern):
+    return bool(pattern.search(result.get("label","")))
+
 def _rank_pangaea_by_leg_match(results, leg):
     """Re-sorts PANGAEA search results so entries that actually name this
     Leg/Hole outrank ones that only loosely match on keywords. PANGAEA's
@@ -750,9 +757,8 @@ def _rank_pangaea_by_leg_match(results, leg):
     completely different Leg that happens to share more keywords (e.g.
     "bulk density") can rank above an exact match for the requested Leg
     that uses more specific terminology (e.g. "GRAPE ... Hole 1-4")."""
-    leg_str = str(leg).strip()
-    pattern = re.compile(rf'\b(?:Leg|Hole|Expedition)\s*{re.escape(leg_str)}[\s\-,]', re.IGNORECASE)
-    return sorted(results, key=lambda r: 0 if pattern.search(r.get("label","")) else 1)
+    pattern = _leg_match_pattern(leg)
+    return sorted(results, key=lambda r: 0 if _matches_leg(r, pattern) else 1)
 
 def search_pangaea_legacy(leg, project="DSDP", report_keyword=None, count=15):
     """Search PANGAEA for legacy DSDP/ODP shipboard datasets tied to a Leg
@@ -763,23 +769,39 @@ def search_pangaea_legacy(leg, project="DSDP", report_keyword=None, count=15):
     for every Leg since those field names were never confirmed to exist.
     Reuses search_pangaea()'s proven free-text query for the same reason.
 
-    report_keyword narrows results toward the actual measurement type asked
-    for (e.g. "GRA bulk density"). Without it, this only narrows by Leg and
-    project, and returns whatever dataset types happen to exist for that
-    Leg — core photos, XRD protocols, geochemistry, etc. — regardless of
-    which physical property was actually requested. This is still a
-    free-text relevance search, not a strict filter, so it narrows results
-    rather than guaranteeing only matching-type datasets come back."""
-    if project == "DSDP":
-        query = f'"Leg {leg}" DSDP'
-    else:  # ODP shipboard party datasets
-        query = f'"Leg {leg}" "Shipboard Scientific Party"'
+    Searches in two stages rather than combining the Leg number and the
+    report keyword into one query: combining them trusts PANGAEA to rank
+    both well together, but if some other Leg simply has far more datasets
+    matching the report keyword (e.g. "P-wave velocity"), that volume can
+    bury every genuine match for the requested Leg outside the results
+    actually returned — no amount of re-sorting after the fact can recover
+    a match that was never fetched in the first place. Stage 1 confirms
+    what's actually tagged to this Leg, ignoring the report type entirely
+    so it can't get drowned out; stage 2 prefers the report-relevant ones
+    among those confirmed matches."""
+    base_query = (f'"Leg {leg}" DSDP' if project == "DSDP"
+                 else f'"Leg {leg}" "Shipboard Scientific Party"')
+    broad_results, err = search_pangaea(base_query, count=max(count, 30))
+    if err:
+        return [], err
+    pattern = _leg_match_pattern(leg)
+    leg_matches = [r for r in broad_results if _matches_leg(r, pattern)]
+    if leg_matches:
+        if report_keyword:
+            kw_lower = report_keyword.lower()
+            leg_matches.sort(key=lambda r: 0 if kw_lower in r.get("label","").lower() else 1)
+        return leg_matches[:count], None
+    # No confirmed Leg match in the broad search — fall back to including
+    # the report keyword in the query itself, in case this Leg's datasets
+    # are only findable that way (e.g. the Leg number isn't in the title
+    # at all and only the keyword-based relevance ranking can find it).
     if report_keyword:
-        query += f" {report_keyword}"
-    results, err = search_pangaea(query, count=count)
-    if results:
-        results = _rank_pangaea_by_leg_match(results, leg)
-    return results, err
+        query = f"{base_query} {report_keyword}"
+        results, err2 = search_pangaea(query, count=count)
+        if results:
+            results = _rank_pangaea_by_leg_match(results, leg)
+        return results, err2
+    return broad_results[:count], None
 
 NGDC_DSDP_BASE = "https://www.ngdc.noaa.gov/mgg/geology/data/glomar_challenger/all_dsdp_data_by_type/"
 
