@@ -1,5 +1,3 @@
-
-
 # =============================================================================
 # IODP Explorer -- Interactive Data Visualization Dashboard
 # =============================================================================
@@ -747,7 +745,15 @@ def search_pangaea(query, count=10):
 
 def _leg_match_pattern(leg):
     leg_str = str(leg).strip()
-    return re.compile(rf'\b(?:Leg|Hole|Expedition)\s*{re.escape(leg_str)}[\s\-,]', re.IGNORECASE)
+    # \b (a zero-width word boundary) after the number correctly matches
+    # whether it's followed by a space, a hyphen, a comma, or nothing at
+    # all (end of string/title) — the previous version required one of a
+    # specific set of characters immediately after the number, which
+    # silently failed to match titles where the Leg number was the very
+    # last thing in the string. Leg/Hole/Expedition also now accept a
+    # trailing "s" (e.g. "DSDP Legs 1 and 4"), which the singular-only
+    # version missed.
+    return re.compile(rf'\b(?:Legs?|Holes?|Expeditions?)\s*{re.escape(leg_str)}\b', re.IGNORECASE)
 
 def _matches_leg(result, pattern):
     return bool(pattern.search(result.get("label","")))
