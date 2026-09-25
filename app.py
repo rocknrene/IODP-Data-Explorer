@@ -942,7 +942,8 @@ def fetch_dsdp_ngdc(file_code, expedition, site="", hole="", timeout=30):
     fail, the caller falls back to shinylaurel.com. The exact column
     delimiter of these files hasn't been confirmed either, so several
     common ones are tried in turn."""
-    last_err = None
+    errors = []
+    df = None
     for base in NGDC_DSDP_BASE_CANDIDATES:
         url = f"{base}{file_code}.txt"
         try:
@@ -950,24 +951,25 @@ def fetch_dsdp_ngdc(file_code, expedition, site="", hole="", timeout=30):
                              headers={"User-Agent": "Mozilla/5.0 (research script)"})
             r.raise_for_status()
             text = r.text
-            df = None
+            candidate_df = None
             for sep in ["\t", r"\s{2,}", ","]:
                 try:
                     candidate = pd.read_csv(io.StringIO(text), sep=sep, engine="python")
                     if candidate.shape[1] > 1:
-                        df = candidate
+                        candidate_df = candidate
                         break
                 except Exception:
                     continue
-            if df is None or df.empty:
-                last_err = f"Downloaded from {base} but couldn't parse its column layout"
+            if candidate_df is None or candidate_df.empty:
+                errors.append(f"{base}: downloaded but couldn't parse its column layout")
                 continue
+            df = candidate_df
             break
         except Exception as e:
-            last_err = f"NGDC fetch failed ({base}): {e}"
+            errors.append(f"{base}: {e}")
             continue
     else:
-        return None, last_err
+        return None, "; ".join(errors)
 
     n_raw = len(df)
     df = _restrict_to_request(df, expedition, site, hole)
