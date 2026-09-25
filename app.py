@@ -849,8 +849,6 @@ def search_pangaea_legacy(leg, project="DSDP", report_keyword=None, count=15):
 
     return ranked[:count], None
 
-NGDC_DSDP_BASE = "https://www.ngdc.noaa.gov/mgg/geology/data/glomar_challenger/all_dsdp_data_by_type/"
-
 # NCEI/NGDC's internal file-name codes for each DSDP "by data type" flat
 # file, and which report type each is the real-world equivalent of.
 # Confirmed directly from Laurel's own team's published reference data
@@ -918,6 +916,19 @@ NGDC_DSDP_FILE_CODES = {
     "x-ray diffraction - UCR, silt":              "xrd_silt",
 }
 
+NGDC_DSDP_BASE_CANDIDATES = [
+    # NCEI's own current metadata landing page for this dataset
+    # (doi:10.7289/V54M92G2) explicitly links this path as "Data files and
+    # documentation" — "Web version of data... Data file access by leg,
+    # site/hole, data type, and geographic area." This is the more
+    # authoritative, currently-live-linked path.
+    "https://www.ngdc.noaa.gov/mgg/geology/dsdp/all_dsdp_data_by_type/",
+    # The path Laurel's own team's published reference data
+    # (LIMS2_dsdp_NGDClinks_dt.csv) uses instead — kept as a second
+    # attempt in case one path has moved and the other hasn't.
+    "https://www.ngdc.noaa.gov/mgg/geology/data/glomar_challenger/all_dsdp_data_by_type/",
+]
+
 def fetch_dsdp_ngdc(file_code, expedition, site="", hole="", timeout=30):
     """Downloads a DSDP 'by data type' flat file directly from NCEI/NGDC's
     static archive — a plain file per data type covering every DSDP Leg,
@@ -926,29 +937,37 @@ def fetch_dsdp_ngdc(file_code, expedition, site="", hole="", timeout=30):
     far simpler and faster when it works.
 
     NOTE: shinylaurel.com's own page states this NCEI hosting was
-    "unavailable for download" as of July 2026, so this endpoint may
-    currently be down — if it fails, the caller falls back to
-    shinylaurel.com. The exact column delimiter of these files hasn't
-    been confirmed either, so several common ones are tried in turn."""
-    url = f"{NGDC_DSDP_BASE}{file_code}.txt"
-    try:
-        r = requests.get(url, timeout=timeout,
-                         headers={"User-Agent": "Mozilla/5.0 (research script)"})
-        r.raise_for_status()
-        text = r.text
-        df = None
-        for sep in ["\t", r"\s{2,}", ","]:
-            try:
-                candidate = pd.read_csv(io.StringIO(text), sep=sep, engine="python")
-                if candidate.shape[1] > 1:
-                    df = candidate
-                    break
-            except Exception:
+    "unavailable for download" as of July 2026, so this may currently be
+    down entirely regardless of which URL is used — if both candidates
+    fail, the caller falls back to shinylaurel.com. The exact column
+    delimiter of these files hasn't been confirmed either, so several
+    common ones are tried in turn."""
+    last_err = None
+    for base in NGDC_DSDP_BASE_CANDIDATES:
+        url = f"{base}{file_code}.txt"
+        try:
+            r = requests.get(url, timeout=timeout,
+                             headers={"User-Agent": "Mozilla/5.0 (research script)"})
+            r.raise_for_status()
+            text = r.text
+            df = None
+            for sep in ["\t", r"\s{2,}", ","]:
+                try:
+                    candidate = pd.read_csv(io.StringIO(text), sep=sep, engine="python")
+                    if candidate.shape[1] > 1:
+                        df = candidate
+                        break
+                except Exception:
+                    continue
+            if df is None or df.empty:
+                last_err = f"Downloaded from {base} but couldn't parse its column layout"
                 continue
-        if df is None or df.empty:
-            return None, "Downloaded file but couldn't parse its column layout"
-    except Exception as e:
-        return None, f"NGDC fetch failed: {e}"
+            break
+        except Exception as e:
+            last_err = f"NGDC fetch failed ({base}): {e}"
+            continue
+    else:
+        return None, last_err
 
     n_raw = len(df)
     df = _restrict_to_request(df, expedition, site, hole)
@@ -2129,12 +2148,36 @@ for _ds in ["a","b"]:
         try_odp    = vessel is None or (vessel == "JOIDES Resolution" and program == "ODP")
         try_msp    = vessel == "MSP"
         is_chikyu  = vessel == "Chikyu"
+        report_keyword = PANGAEA_REPORT_KEYWORDS.get(report)
 
         if is_chikyu:
+            # An official SOD data-access guide confirms Chikyu data is
+            # also archived on PANGAEA (using a facet filter this app can
+            # only approximate as free text, since that faceted PANGAEA
+            # URL is itself a JS-rendered page a plain request can't read) —
+            # worth trying before concluding there's no path at all.
+            results, err = search_pangaea(
+                f'"Expedition {exp}" Chikyu' + (f" {report_keyword}" if report_keyword else "")
+            )
+            if results:
+                results = _rank_pangaea_by_leg_match(results, exp)
+                if report_keyword and not any(
+                    _kw_matches(r.get("label","").lower(), report_keyword.lower()) for r in results
+                ):
+                    results = []
+            if not err and results:
+                if len(results) == 1:
+                    pid = results[0]["value"]
+                    df, ferr = fetch_pangaea_doi(pid)
+                    if not ferr and df is not None and not df.empty:
+                        status = f"✓ PANGAEA (Chikyu)  {pid}  Expedition {exp}  ({len(df):,} rows)"
+                        return df2j(df), status, ""
+                status = (f"{len(results)} PANGAEA match(es) for Expedition {exp} (Chikyu):")
+                return None, status, _pangaea_pick_list(ds, results)
             return (None,
-                    f"Leg {exp} was drilled by Chikyu (JAMSTEC) — no public API for this "
-                    f"program. Download the bulk export zip from JAMSTEC's data site and "
-                    f"use Local file upload (zip is supported).",
+                    f"Leg {exp} was drilled by Chikyu (JAMSTEC) — no PANGAEA match found for "
+                    f"this report type either. Download the bulk export zip from JAMSTEC's "
+                    f"data site and use Local file upload (zip is supported).",
                     "")
 
         # 1) LIMS/LORE (JR expeditions, 317+). NOTE: LORE's public interface
@@ -2150,8 +2193,6 @@ for _ds in ["a","b"]:
             if not err and df is not None and not df.empty:
                 status = f"✓ LIMS/LORE  {ALL_REPORT_TYPES.get(report,report)}  Leg {exp}  ({len(df):,} rows)"
                 return df2j(df), status, ""
-
-        report_keyword = PANGAEA_REPORT_KEYWORDS.get(report)
 
         # 2) For DSDP-era Legs: try NGDC's direct static file first (a
         # plain HTTP request — fast and simple when it works), then
