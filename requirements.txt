@@ -6,3 +6,6 @@ openpyxl==3.1.2
 lasio==0.31
 flask==3.0.3
 gunicorn==22.0.0
+requests==2.32.3
+selenium==4.23.1
+scipy==1.13.1
