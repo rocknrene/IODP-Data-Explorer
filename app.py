@@ -1,3 +1,5 @@
+
+
 # =============================================================================
 # IODP Explorer -- Interactive Data Visualization Dashboard
 # =============================================================================
@@ -769,39 +771,69 @@ def search_pangaea_legacy(leg, project="DSDP", report_keyword=None, count=15):
     for every Leg since those field names were never confirmed to exist.
     Reuses search_pangaea()'s proven free-text query for the same reason.
 
-    Searches in two stages rather than combining the Leg number and the
-    report keyword into one query: combining them trusts PANGAEA to rank
-    both well together, but if some other Leg simply has far more datasets
-    matching the report keyword (e.g. "P-wave velocity"), that volume can
-    bury every genuine match for the requested Leg outside the results
-    actually returned — no amount of re-sorting after the fact can recover
-    a match that was never fetched in the first place. Stage 1 confirms
-    what's actually tagged to this Leg, ignoring the report type entirely
-    so it can't get drowned out; stage 2 prefers the report-relevant ones
-    among those confirmed matches."""
+    Runs two queries — the Leg number alone, and the Leg number plus the
+    report keyword — and merges their results, rather than trusting either
+    single query's top results to contain the right answer. Combining the
+    Leg and keyword into one query lets datasets from an entirely different
+    Leg dominate the results if that Leg simply has more keyword-matching
+    data (e.g. more "P-wave velocity" datasets than the requested Leg has).
+    Searching the Leg alone avoids that, but has the opposite failure mode:
+    if the real matching-type dataset for this Leg doesn't happen to rank
+    in PANGAEA's own top results for the bare Leg query, it's never
+    fetched at all, and no amount of re-sorting afterward can recover a
+    result that was never retrieved. Querying both ways and merging means
+    a real match only has to surface in *either* query's top results, not
+    both — then results confirmed on both the Leg and the report keyword
+    are ranked first, Leg-confirmed-only next, keyword-only last."""
     base_query = (f'"Leg {leg}" DSDP' if project == "DSDP"
                  else f'"Leg {leg}" "Shipboard Scientific Party"')
-    broad_results, err = search_pangaea(base_query, count=max(count, 30))
-    if err:
-        return [], err
-    pattern = _leg_match_pattern(leg)
-    leg_matches = [r for r in broad_results if _matches_leg(r, pattern)]
-    if leg_matches:
-        if report_keyword:
-            kw_lower = report_keyword.lower()
-            leg_matches.sort(key=lambda r: 0 if kw_lower in r.get("label","").lower() else 1)
-        return leg_matches[:count], None
-    # No confirmed Leg match in the broad search — fall back to including
-    # the report keyword in the query itself, in case this Leg's datasets
-    # are only findable that way (e.g. the Leg number isn't in the title
-    # at all and only the keyword-based relevance ranking can find it).
+    broad_results, err1 = search_pangaea(base_query, count=30)
+
+    kw_results, err2 = ([], None)
     if report_keyword:
-        query = f"{base_query} {report_keyword}"
-        results, err2 = search_pangaea(query, count=count)
-        if results:
-            results = _rank_pangaea_by_leg_match(results, leg)
-        return results, err2
-    return broad_results[:count], None
+        kw_results, err2 = search_pangaea(f"{base_query} {report_keyword}", count=30)
+
+    if err1 and err2:
+        return [], err1
+    if err1:
+        broad_results = []
+    if err2:
+        kw_results = []
+
+    # Deduplicate by dataset id, preferring the label from the bare-Leg
+    # query (its title isn't shaped by which keyword was searched for).
+    merged = {}
+    for r in broad_results + kw_results:
+        pid = r.get("value")
+        if pid and pid not in merged:
+            merged[pid] = r
+    if not merged:
+        return [], None
+
+    pattern = _leg_match_pattern(leg)
+    kw_lower = report_keyword.lower() if report_keyword else None
+    def kw_matches(label_lower):
+        if not kw_lower:
+            return True
+        # Tolerate simple singular/plural mismatches (e.g. a PANGAEA title
+        # saying "Diatom stratigraphy" when the keyword is "diatoms") —
+        # an exact-substring check alone would wrongly treat that as a
+        # non-match and rank a genuinely relevant result no higher than
+        # an irrelevant one.
+        if kw_lower in label_lower:
+            return True
+        if kw_lower.endswith("s") and kw_lower[:-1] in label_lower:
+            return True
+        return False
+    def score(r):
+        leg_ok = _matches_leg(r, pattern)
+        kw_ok = kw_matches(r.get("label","").lower())
+        if leg_ok and kw_ok: return 0
+        if leg_ok:           return 1
+        if kw_ok:            return 2
+        return 3
+    ranked = sorted(merged.values(), key=score)
+    return ranked[:count], None
 
 NGDC_DSDP_BASE = "https://www.ngdc.noaa.gov/mgg/geology/data/glomar_challenger/all_dsdp_data_by_type/"
 
