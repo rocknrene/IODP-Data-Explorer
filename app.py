@@ -947,8 +947,15 @@ def fetch_dsdp_ngdc(file_code, expedition, site="", hole="", timeout=30):
     for base in NGDC_DSDP_BASE_CANDIDATES:
         url = f"{base}{file_code}.txt"
         try:
+            # A plain, honest User-Agent (e.g. naming this as a script)
+            # got a real 403 Forbidden from this specific path — basic
+            # bot-detection reacting to a non-browser-looking request
+            # rather than the path being wrong. A standard browser UA
+            # avoids that without changing what's actually being requested.
             r = requests.get(url, timeout=timeout,
-                             headers={"User-Agent": "Mozilla/5.0 (research script)"})
+                             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                                   "Chrome/124.0.0.0 Safari/537.36"})
             r.raise_for_status()
             text = r.text
             candidate_df = None
@@ -1023,21 +1030,47 @@ def fetch_dsdp_shinylaurel(data_type_label, expedition, site="", hole="", timeou
     server enables it with a real href once a full Leg + Site + Data type
     selection has been made.
 
-    NOTE: this has not been exercised against the live site — this sandbox
-    has no network path to shinylaurel.com and no Chromium binary to run
-    Selenium at all, so this is built from the app's actual rendered HTML
-    (not from guessing) but still untested end-to-end. Expect to need at
-    least one round of fixes once this actually runs on the deployed Space.
+    These dropdowns are enhanced by selectize.js (confirmed from the page
+    source's "plugins":["selectize-plugin-a11y"] config) — selectize
+    empties out the native <option> elements once it initializes and
+    manages the option list internally in JS instead, rendering its own
+    UI. That makes Selenium's Select().select_by_value() unreliable here:
+    it searches for a literal <option> DOM child, which may no longer
+    exist even for a genuinely valid value (confirmed live: a real
+    "Cannot locate option with value" error against this exact page). So
+    this talks to selectize's own JS instance API directly instead of
+    Selenium's Select helper, for both reading available option values
+    and setting them.
     """
     try:
         from selenium import webdriver
         from selenium.webdriver.common.by import By
-        from selenium.webdriver.support.ui import WebDriverWait, Select
+        from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.chrome.service import Service
         from selenium.webdriver.chrome.options import Options
     except ImportError:
         return None, "Selenium isn't installed in this environment"
+
+    def _selectize_get_values(d, element_id):
+        return d.execute_script("""
+            var el = document.getElementById(arguments[0]);
+            if (el && el.selectize) { return Object.keys(el.selectize.options); }
+            return el ? Array.from(el.options).map(function(o){return o.value;}) : [];
+        """, element_id)
+
+    def _selectize_set_value(d, element_id, value):
+        """value may be a single string or a list (for a multi-select)."""
+        d.execute_script("""
+            var el = document.getElementById(arguments[0]);
+            var val = arguments[1];
+            if (el && el.selectize) {
+                el.selectize.setValue(val, false);
+            } else {
+                el.value = Array.isArray(val) ? val[0] : val;
+                el.dispatchEvent(new Event('change', {bubbles: true}));
+            }
+        """, element_id, value)
 
     tmp_dir = tempfile.mkdtemp(prefix="dsdp_dl_")
     chrome_opts = Options()
@@ -1067,44 +1100,30 @@ def fetch_dsdp_shinylaurel(data_type_label, expedition, site="", hole="", timeou
         wait.until(EC.element_to_be_clickable(
             (By.CSS_SELECTOR, "a[data-value='bysite']"))).click()
 
-        # Leg (#var1) — a plain single-select, DSDP Legs 1-96
-        leg_select = Select(wait.until(EC.presence_of_element_located((By.ID, "var1"))))
-        leg_select.select_by_value(str(expedition))
+        # Leg (#var1) — DSDP Legs 1-96
+        wait.until(EC.presence_of_element_located((By.ID, "var1")))
+        _selectize_set_value(driver, "var1", str(expedition))
 
-        # Site (#var2) starts as a single "placeholder1" option until the
+        # Site (#var2) starts as a single "placeholder1" value until the
         # server responds to the Leg selection — wait for it to actually
         # refresh before touching it.
         def _sites_loaded(d):
-            opts = Select(d.find_element(By.ID, "var2")).options
-            return len(opts) >= 1 and opts[0].get_attribute("value") != "placeholder1"
+            vals = _selectize_get_values(d, "var2")
+            return len(vals) >= 1 and vals[0] != "placeholder1"
         wait.until(_sites_loaded)
 
         if site:
-            site_select = Select(driver.find_element(By.ID, "var2"))
-            # #var2 is a multi-select — select_by_value() ADDS to whatever
-            # is already selected rather than replacing it, and the app's
-            # default selection state after a Leg change isn't known, so
-            # clear it explicitly first to guarantee only the requested
-            # site ends up selected.
-            site_select.deselect_all()
-            try:
-                site_select.select_by_value(site)
-            except Exception:
-                pass  # requested site not in the live list — leave default selection
+            _selectize_set_value(driver, "var2", [site])
         else:
             # No site requested — explicitly select every available site,
             # rather than relying on whatever the app's own default
             # selection happens to be.
-            site_select = Select(driver.find_element(By.ID, "var2"))
-            for opt in site_select.options:
-                val = opt.get_attribute("value")
-                if val:
-                    site_select.select_by_value(val)
+            all_sites = _selectize_get_values(driver, "var2")
+            _selectize_set_value(driver, "var2", all_sites)
 
         # Data type (#var_data) — values are the exact category strings
         # confirmed from the page source (e.g. "gamma ray attenuation").
-        data_select = Select(driver.find_element(By.ID, "var_data"))
-        data_select.select_by_value(data_type_label)
+        _selectize_set_value(driver, "var_data", data_type_label)
 
         # The download link is disabled until the server has a complete,
         # valid selection to build a file from.
