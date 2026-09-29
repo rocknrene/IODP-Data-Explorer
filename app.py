@@ -1779,6 +1779,11 @@ def dataset_panel(ds):
               "paddingBottom":"12px","marginBottom":"12px"})
 
 
+# Each column picker in the bar above the Post-Expedition chart: wraps onto
+# a new line on narrow screens instead of squeezing.
+PE_CTRL_ITEM = {"flex":"1 1 180px","minWidth":"160px"}
+PE_CTRL_LBL  = {**LBL, "marginTop":"0"}
+
 post_sidebar = html.Div([
     html.P("POST-EXPEDITION", style={**LBL,"marginTop":"0","fontSize":"11px",
                                      "color":"var(--muted)","letterSpacing":"3px"}),
@@ -1804,10 +1809,8 @@ post_sidebar = html.Div([
     html.P("MERGE SETTINGS", style={**LBL,"marginTop":"0"}),
     html.Div("Depth tolerance (cm)", style={"color":"var(--muted)","fontSize":"10px","marginBottom":"4px"}),
     dcc.Input(id="pe-tolerance", value="2", type="number", min=0, max=500, style=INP),
-    html.Div("Depth col — A", style={"color":"var(--muted)","fontSize":"10px","marginTop":"8px","marginBottom":"4px"}),
-    dcc.Dropdown(id="pe-depth-a", options=[], placeholder="auto-detect", style=DD),
-    html.Div("Depth col — B", style={"color":"var(--muted)","fontSize":"10px","marginTop":"8px","marginBottom":"4px"}),
-    dcc.Dropdown(id="pe-depth-b", options=[], placeholder="auto-detect", style=DD),
+    html.Div("Pick the depth column for each dataset in the bar above the chart.",
+             style={"color":"var(--muted)","fontSize":"9px","marginTop":"6px","lineHeight":"1.4"}),
     html.Button("Merge datasets", id="pe-merge-btn", n_clicks=0,
                 style={**BTN("var(--accent2)"),"marginTop":"10px","fontSize":"12px"}),
     html.Hr(style={"borderColor":"var(--border)","margin":"10px 0"}),
@@ -1823,14 +1826,6 @@ post_sidebar = html.Div([
                     "color":"var(--text)","fontSize":"11px","fontFamily":FONT},
         inputStyle={"marginRight":"6px","accentColor":"var(--accent2)"},
     ),
-    html.P("DEPTH COLUMN", style=LBL),
-    dcc.Dropdown(id="pe-xaxis", options=[], value=None, style=DD),
-    html.P("DATASET A  columns", id="pe-yaxis-lbl", style=LBL),
-    dcc.Dropdown(id="pe-yaxis", options=[], value=None, multi=True, style=DD),
-    html.Div(id="pe-ycols-b-container", children=[
-        html.P("DATASET B  columns", style=LBL),
-        dcc.Dropdown(id="pe-ycols-b", options=[], value=None, multi=True, style=DD),
-    ]),
     html.Div(id="pe-rolling-ctrl", style={"display":"none"}, children=[
         html.P("Rolling window (rows)", style={**LBL,"marginTop":"8px"}),
         html.Div("Centered simple moving average over this many rows (not a "
@@ -1980,6 +1975,31 @@ def render_tab(tab):
                                "fontSize":"11px","marginLeft":"16px"}),
                     dcc.Download(id="pe-download"),
                 ], style={"marginBottom":"12px"}),
+
+                # Column pickers: which columns hold depth, and what to plot.
+                html.Div([
+                    html.Div([
+                        html.P("DEPTH COL — A", style=PE_CTRL_LBL),
+                        dcc.Dropdown(id="pe-depth-a", options=[], placeholder="auto-detect", style=DD),
+                    ], style=PE_CTRL_ITEM),
+                    html.Div([
+                        html.P("DEPTH COL — B", style=PE_CTRL_LBL),
+                        dcc.Dropdown(id="pe-depth-b", options=[], placeholder="auto-detect", style=DD),
+                    ], style=PE_CTRL_ITEM),
+                    html.Div([
+                        html.P("DEPTH AXIS", style=PE_CTRL_LBL),
+                        dcc.Dropdown(id="pe-xaxis", options=[], value=None, style=DD),
+                    ], style=PE_CTRL_ITEM),
+                    html.Div([
+                        html.P("DATASET A  columns", id="pe-yaxis-lbl", style=PE_CTRL_LBL),
+                        dcc.Dropdown(id="pe-yaxis", options=[], value=None, multi=True, style=DD),
+                    ], style={**PE_CTRL_ITEM, "flex":"2 1 240px"}),
+                    html.Div(id="pe-ycols-b-container", children=[
+                        html.P("DATASET B  columns", style=PE_CTRL_LBL),
+                        dcc.Dropdown(id="pe-ycols-b", options=[], value=None, multi=True, style=DD),
+                    ], style={**PE_CTRL_ITEM, "flex":"2 1 240px"}),
+                ], style={**CARD, "display":"flex", "flexWrap":"wrap", "gap":"12px",
+                          "alignItems":"flex-end", "marginBottom":"12px"}),
 
                 dcc.Graph(id="pe-chart", config={"displayModeBar":True,"scrollZoom":True}),
                 # Post-expedition table also scrolls independently
@@ -2249,6 +2269,9 @@ for _ds in ["a","b"]:
         prevent_initial_call=True,
     )
     def pe_load_upload(contents, filename):
+        # Runs once when the tab first renders, before any file is chosen.
+        if not contents:
+            return no_update, no_update
         df, meta = parse_upload(contents, filename)
         if "error" in meta: return None, f"Error: {meta['error']}"
         return df2j(df), _upload_status_msg(filename, df, meta)
@@ -2549,7 +2572,7 @@ def pe_active_data(mode, dm, da, db):
 )
 def pe_view_mode_ui(mode):
     if mode == "merged":
-        return {}, "DATASET A  columns"
+        return {**PE_CTRL_ITEM, "flex":"2 1 240px"}, "DATASET A  columns"
     label = "DATASET A  columns" if mode == "a" else "DATASET B  columns"
     return {"display":"none"}, label
 
