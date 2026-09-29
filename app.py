@@ -616,24 +616,28 @@ def _find_col(df, keys):
             return c
     return None
 
+def _norm_id(v):
+    """Normalize a Leg/Site/Hole value for comparison: trims spaces, ignores
+    case, and treats 29, "29" and 29.0 as the same value. (pandas reads a
+    whole numeric column as decimals when any cell is blank, which turns
+    Leg 29 into "29.0"; without this, those rows would never match.)"""
+    s = str(v).strip().lower()
+    if s.endswith(".0") and s[:-2].isdigit():
+        s = s[:-2]
+    return s
+
 def _restrict_to_request(df, expedition, site, hole):
-    """LORE's filters aren't guaranteed to actually restrict the report — an
-    unrecognized site/hole value can come back as an unfiltered (or only
-    partially filtered) result instead of zero rows. Re-check the returned
-    rows against what was actually requested so a typo'd or nonexistent
-    site/hole doesn't get reported as a clean, on-target fetch."""
-    exp_col = _find_col(df, ["exp", "leg"])
-    if exp_col is not None and expedition:
-        df = df[df[exp_col].astype(str).str.strip().str.lower()
-                 == str(expedition).strip().lower()]
-    site_col = _find_col(df, ["site"])
-    if site_col is not None and site:
-        df = df[df[site_col].astype(str).str.strip().str.lower()
-                 == str(site).strip().lower()]
-    hole_col = _find_col(df, ["hole"])
-    if hole_col is not None and hole:
-        df = df[df[hole_col].astype(str).str.strip().str.lower()
-                 == str(hole).strip().lower()]
+    """Keep only the rows for the Leg/Site/Hole actually requested. Sources
+    don't always filter reliably (LORE can return unfiltered rows for an
+    unrecognized site/hole; downloads can include extra Legs), so the
+    returned rows are re-checked here. Blank or "*" (pre-lettering DSDP
+    hole) requests don't filter."""
+    for keys, wanted in ((["exp", "leg"], expedition), (["site"], site), (["hole"], hole)):
+        if not wanted or str(wanted).strip() == "*":
+            continue
+        col = _find_col(df, keys)
+        if col is not None:
+            df = df[df[col].map(_norm_id) == _norm_id(wanted)]
     return df
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1865,7 +1869,8 @@ app.layout = html.Div([
               "borderBottom":f"1px solid var(--border)"}),
     html.Div(id="theme-root", style={"display":"none"}),
 
-    dcc.Tabs(id="main-tabs", value="shipboard", style={"fontFamily":FONT},
+    # The app opens on the Post-Expedition tab; Shipboard is one click away.
+    dcc.Tabs(id="main-tabs", value="postexp", style={"fontFamily":FONT},
         children=[
             dcc.Tab(label="Shipboard",       value="shipboard", style=TAB_STYLE, selected_style=TAB_SEL),
             dcc.Tab(label="Post-Expedition", value="postexp",   style=TAB_STYLE, selected_style=TAB_SEL),
