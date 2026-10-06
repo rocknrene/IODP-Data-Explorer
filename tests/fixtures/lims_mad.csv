@@ -1,0 +1,10 @@
+"Report: Moisture and Density"
+"Expedition: 362"
+"Site: U1480"
+"Hole: E"
+Exp,Site,Hole,Core,Type,Sect,A/W,Offset (cm),Depth CSF-A (m),Depth CSF-B (m),Bulk density (g/cm³),Porosity (%),Comments
+362,U1480,E,1,H,1,W,50,0.50,0.50,1.62,68.1,
+362,U1480,E,1,H,2,W,50,2.00,2.00,1.65,66.9,
+362,U1480,E,1,H,3,W,50,3.50,3.50,1.66,66.0,cracked
+362,U1480,E,2,H,1,W,50,5.60,5.40,1.70,63.2,
+362,U1480,E,2,H,2,W,50,7.10,6.90,1.72,62.5,

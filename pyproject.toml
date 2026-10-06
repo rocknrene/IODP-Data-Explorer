@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sod-explorer"
+dynamic = ["version"]
+description = "Retrieval, depth-registered merging, and visualization of scientific ocean drilling data (DSDP, ODP, IODP)."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "René Castillo" }]
+requires-python = ">=3.11"
+keywords = ["IODP", "ODP", "DSDP", "scientific ocean drilling", "physical properties", "LIMS", "PANGAEA"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Oceanography",
+    "Topic :: Scientific/Engineering :: Visualization",
+    "Framework :: Dash",
+]
+# Lower bounds are the major versions the test suite has been run against.
+dependencies = [
+    "dash>=4.0",
+    "plotly>=7.0",
+    "flask>=3.0",
+    "pandas>=3.0",
+    "numpy>=2.0",
+    "scipy>=1.11",
+    "requests>=2.31",
+    "urllib3>=2.0",
+    "lasio>=0.31",
+    "openpyxl>=3.1",
+    "xlrd>=2.0",
+]
+
+[project.optional-dependencies]
+dsdp = ["selenium>=4.20"]
+deploy = ["gunicorn>=22"]
+test = ["pytest>=8", "pytest-cov>=5", "ruff>=0.5"]
+
+[project.urls]
+Application = "https://huggingface.co/spaces/rocknrene/IODP-Data-Explorer"
+Repository = "https://github.com/rocknrene/IODP-Data-Explorer"
+
+[tool.setuptools.dynamic]
+version = { attr = "sod_explorer.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["sod_explorer*"]
+
+[tool.setuptools.package-data]
+"sod_explorer.data" = ["*.csv", "*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I"]
