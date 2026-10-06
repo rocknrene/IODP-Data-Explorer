@@ -284,8 +284,9 @@ _SOURCE_NOTE = (
     "Select a Leg or Expedition; the archive is chosen automatically. DSDP Legs are retrieved "
     "from the DSDP Data Access application (or PANGAEA for a few data types); JOIDES Resolution "
     "expeditions from LORE (LIMS data, Expedition 317 onward); Chikyu and Mission-Specific "
-    "Platform expeditions from PANGAEA. ODP Legs and IODP Expeditions 301 to 312 predate LIMS "
-    "and currently require file upload. Report types use one generic name across programs; a "
+    "Platform expeditions from PANGAEA. ODP Legs are retrieved from the NOAA NCEI archive, one "
+    "Hole at a time; IODP Expeditions 301 to 312 may require file upload. Report types use one "
+    "generic name across programs; a "
     "type with no DSDP equivalent returns no DSDP data."
 )
 
