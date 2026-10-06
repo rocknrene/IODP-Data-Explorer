@@ -22,16 +22,20 @@ Each :class:`ReportType` records, for one generic name,
 
 LORE report names
 -----------------
-LORE identifies a report by a short internal name. The names of twelve
-reports have been verified against LORE's header service
-(:data:`VERIFIED_LORE_NAMES`); most equal the lower-case LIMS analysis
-code (downhole temperature is ``dhtemp``). The names of five geochemistry
-and strength reports (CARB, GE, IW, SRA, PEN) are not yet known and are
-listed as ordered *candidates*. The LORE client requests the header of each candidate in turn and
-uses the first that LORE recognizes
-(:func:`sod_explorer.sources.lore.resolve_report_name`). Run
-``python -m sod_explorer.sources.check_lore`` to list which candidates
-resolve, and move the confirmed names into :data:`VERIFIED_LORE_NAMES`.
+LORE identifies a report by a short internal name, listed by its menu
+service (``/reference/NavHierarchyGet-LORE``). The names in
+:data:`VERIFIED_LORE_NAMES` have been confirmed against LORE; most equal
+the lower-case LIMS analysis code (exceptions: downhole temperature is
+``dhtemp``, the penetrometer report ``penetrate``, and source rock analysis
+``sranl``).
+
+LORE assembles three reports in the browser from an *internal* report and
+a report definition: Carbonates, Interstitial Water, and Gas Elements.
+Carbonates is assembled by this software from ``carbonates_internal``
+(:func:`sod_explorer.sources.lore.assemble_carbonates`). Interstitial
+Water and Gas Elements are not yet assembled, and their entries below
+remain unresolved candidates. Run ``python -m
+sod_explorer.sources.check_lore`` to list which names resolve.
 """
 
 from __future__ import annotations
@@ -42,6 +46,7 @@ from dataclasses import dataclass, field
 VERIFIED_LORE_NAMES = frozenset({
     "gra", "mad", "pwl", "ngr", "tcon", "avs",          # verified in the original application
     "dhtemp", "pwc", "pwb", "rsc", "rgb", "tor",        # verified 2026-10-06 (live checks workflow)
+    "penetrate", "sranl", "carbonates_internal",        # read from LORE's menu service, 2026-10-06
 })
 
 
@@ -55,10 +60,14 @@ class LoreReport:
         LIMS analysis code shown to the user (for example ``"PWC"``).
     candidates
         LORE report names to try, in order.
+    transform
+        For a composite report, the assembly applied to the rows of its
+        internal report (see :mod:`sod_explorer.sources.lore`).
     """
 
     code: str
     candidates: tuple[str, ...]
+    transform: str | None = None   # name of the assembly applied to a composite report
 
 
 @dataclass(frozen=True)
@@ -90,7 +99,8 @@ REPORT_TYPES: tuple[ReportType, ...] = (
     # Geochemistry
     ReportType("carbonates", "Carbonates", "Geochemistry",
                dsdp_category="carbonate and carbon", odp_report="Carbonates (CARB)",
-               lore_reports=(_lore("CARB"),), pangaea_term="carbonate", ncei_codes=("carb",)),
+               lore_reports=(LoreReport("CARB", ("carbonates_internal",), transform="carbonates"),),
+               pangaea_term="carbonate", ncei_codes=("carb",)),
     ReportType("gas_elements", "Gas elements", "Geochemistry",
                odp_report="Gas Elements (GAS)",
                lore_reports=(LoreReport("GE", ("ge", "gaselements", "gas")),),
@@ -101,11 +111,11 @@ REPORT_TYPES: tuple[ReportType, ...] = (
                pangaea_term="interstitial water", ncei_codes=("iw",)),
     ReportType("source_rock", "Source rock analysis", "Geochemistry",
                dsdp_pangaea_term="Rock-Eval pyrolysis", odp_report="Rock Eval (RE/REVAL)",
-               lore_reports=(_lore("SRA"),), pangaea_term="Rock-Eval pyrolysis", ncei_codes=("re",)),
+               lore_reports=(LoreReport("SRA", ("sranl",)),), pangaea_term="Rock-Eval pyrolysis", ncei_codes=("re",)),
     # Physical properties
     ReportType("penetrometer", "Compressional strength (penetrometer)", "Physical properties",
                dsdp_pangaea_term="penetrometer", odp_report="Shear Strength (PEN)",
-               lore_reports=(_lore("PEN"),), pangaea_term="penetrometer", ncei_codes=("pen",)),
+               lore_reports=(LoreReport("PEN", ("penetrate",)),), pangaea_term="penetrometer", ncei_codes=("pen",)),
     ReportType("gra", "Gamma ray attenuation bulk density", "Physical properties",
                dsdp_category="gamma ray attenuation", odp_report="Bulk density (GRA)",
                lore_reports=(_lore("GRA"),), pangaea_term="GRA bulk density", ncei_codes=("gra",)),
