@@ -1,0 +1,5 @@
+[2026-10-06 23:55:09 +0000] [1] [INFO] Starting gunicorn 26.2.0
+[2026-10-06 23:55:09 +0000] [1] [INFO] Listening at: http://0.0.0.0:7860 (1)
+[2026-10-06 23:55:09 +0000] [1] [INFO] Using worker: sync
+[2026-10-06 23:55:09 +0000] [7] [INFO] Booting worker with pid: 7
+[2026-10-06 23:55:09 +0000] [1] [INFO] Control socket listening at /root/.gunicorn/gunicorn.ctl
