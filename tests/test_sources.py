@@ -174,6 +174,18 @@ class TestPangaea:
         assert source["doi"] == "10.1594/PANGAEA.123456"
         assert source["license"].endswith("(CC-BY-3.0)") and source["citation"]
 
+    def test_restricted_dataset_is_explained(self, monkeypatch):
+        """Datasets under moratorium answer HTTP 401; the message says so."""
+        import requests
+
+        class Restricted(FakeResponse):
+            def raise_for_status(self):
+                raise requests.HTTPError("401", response=self)
+
+        monkeypatch.setattr(pangaea.requests, "get", lambda *a, **k: Restricted(status=401))
+        with pytest.raises(SourceError, match="access-restricted"):
+            pangaea.fetch_dataset("997314")
+
     def test_fetch_dataset_rejects_bad_identifier(self):
         with pytest.raises(SourceError):
             pangaea.fetch_dataset("../etc")
@@ -291,4 +303,3 @@ class TestRouting:
 def test_user_agent_identifies_software():
     assert "SOD-Explorer" in common.USER_AGENT
     assert "Mozilla" not in common.USER_AGENT
-
