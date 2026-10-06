@@ -289,10 +289,12 @@ tests/             Test suite and fixtures
 - Sites and holes for Expeditions 380, 389, and 405 are not yet in the
   reference table; these expeditions can be selected, but only with Site and
   Hole left blank.
-- The LORE names of eleven LIMS reports (all except GRA, MAD, PWL, NGR, TCON,
-  and AVS) have not been verified against LORE. The client tries the LIMS
-  analysis code first and then alternatives; run
-  `python -m sod_explorer.sources.check_lore` to see which resolve.
+- The LORE names of five LIMS reports (CARB, GE, IW, SRA, PEN) are not yet
+  known, so carbonates, gas elements, interstitial water, source rock
+  analysis, and penetrometer strength cannot yet be retrieved for JOIDES
+  Resolution expeditions. The other twelve report names are verified.
+- PANGAEA datasets under moratorium require a login and cannot be retrieved;
+  the application reports this and asks for another dataset or a file upload.
 - DSDP retrieval automates the DSDP Data Access web application (used with
   its maintainer's permission) and will fail if its page layout changes.
 - The merge pairs nearest samples; it does not interpolate.
