@@ -247,12 +247,25 @@ class TestRouting:
         outcome = routing.fetch("mad", "362")
         assert outcome.df is frame and "LORE" in outcome.message
 
-    def test_pre_lims_leg_explains_archive(self, monkeypatch):
-        def fail(*args):
+    def test_odp_leg_uses_ncei(self, monkeypatch):
+        frame = pd.DataFrame({"x": [1]})
+        monkeypatch.setattr(routing.ncei, "fetch", lambda *a: (frame, {"type": "ncei"}))
+        monkeypatch.setattr(routing.lore, "fetch", lambda *a: pytest.fail("LORE must not be queried"))
+        outcome = routing.fetch("mad", "204", "1244", "C")
+        assert outcome.df is frame and outcome.message.startswith("NCEI")
+
+    def test_odp_leg_falls_back_to_lore_then_explains(self, monkeypatch):
+        def no_ncei(*args):
+            raise SourceError("The NCEI archive has no file")
+        def no_lore(*args):
             raise SourceError("LORE has no MAD data for Exp 150")
-        monkeypatch.setattr(routing.lore, "fetch", fail)
+        monkeypatch.setattr(routing.ncei, "fetch", no_ncei)
+        monkeypatch.setattr(routing.lore, "fetch", no_lore)
         outcome = routing.fetch("mad", "150")
-        assert outcome.df is None and "predates the LIMS" in outcome.message
+        assert outcome.df is None and "NCEI" in outcome.message and "predates the LIMS" in outcome.message
+        frame = pd.DataFrame({"x": [1]})
+        monkeypatch.setattr(routing.lore, "fetch", lambda *a: (frame, {"type": "lore"}))
+        assert routing.fetch("mad", "150").df is frame
 
     def test_unlettered_hole_not_sent_to_lore(self, monkeypatch):
         seen = {}
@@ -303,3 +316,72 @@ class TestRouting:
 def test_user_agent_identifies_software():
     assert "SOD-Explorer" in common.USER_AGENT
     assert "Mozilla" not in common.USER_AGENT
+
+
+
+class TestNcei:
+    @pytest.fixture(autouse=True)
+    def _no_pause(self, monkeypatch):
+        from sod_explorer.sources import ncei
+        monkeypatch.setattr(ncei, "PAUSE_S", 0)
+        ncei._fetch_file.cache_clear()
+
+    def _serve(self, monkeypatch, files):
+        """Replace HTTP with a dict of URL -> text; other URLs answer 404."""
+        from types import SimpleNamespace
+
+        from sod_explorer.sources import ncei
+        requested = []
+        def get(url, **kwargs):
+            requested.append(url)
+            if url in files:
+                return SimpleNamespace(status_code=200, text=files[url], encoding="utf-8")
+            return SimpleNamespace(status_code=404, text="<html>Not Found</html>", encoding="utf-8")
+        monkeypatch.setattr(ncei.requests, "get", get)
+        return requested
+
+    def test_file_url(self):
+        from sod_explorer.sources import ncei
+        assert ncei.file_url("carb", "204", "1244", "C").endswith("/204/1244c/carb_204_1244c.txt")
+
+    def test_parse_carbonate_file(self, fixture_bytes):
+        from sod_explorer.columns import depth_scale, find_depth_column
+        from sod_explorer.sources import ncei
+        df = ncei.parse_data_file(fixture_bytes("ncei_carb_204_1244c.txt").decode())
+        assert len(df) == 3 and df.columns[-1] == "Hydrogen (mg HC/g)"
+        assert df["Hole"].tolist() == ["C"] * 3 and df["Site"].tolist() == ["1244"] * 3
+        assert pd.isna(df.loc[2, "Total_Carbon (wt %)"]) and df.loc[0, "Calcium_Carbonate (wt %)"] == 4.25
+        depth = find_depth_column(df)
+        assert depth == "Depth (mbsf)" and depth_scale(depth) == "mbsf"
+
+    def test_html_is_not_a_data_file(self):
+        from sod_explorer.sources import ncei
+        with pytest.raises(SourceError):
+            ncei.parse_data_file("<html><body>Not Found</body></html>")
+
+    def test_fetch_one_hole(self, monkeypatch, fixture_bytes):
+        from sod_explorer.sources import ncei
+        url = ncei.file_url("mad", "204", "1244", "C")
+        requested = self._serve(monkeypatch, {url: fixture_bytes("ncei_mad_204_1244c.txt").decode()})
+        df, source = ncei.fetch("mad", "204", "1244", "c")
+        assert requested == [url] and len(df) == 7 and "Porosity (%)" in df.columns
+        assert source["type"] == "ncei" and source["doi"] == "10.7289/V5W37T8C"
+        assert source["query"]["files"] == [{"url": url, "rows": 7}]
+        ncei.fetch("mad", "204", "1244", "C")
+        assert requested == [url], "a repeated request must be served from the cache"
+
+    def test_fetch_site_requests_each_hole_of_reference_table(self, monkeypatch, fixture_bytes):
+        from sod_explorer.sources import ncei
+        monkeypatch.setattr(ncei, "holes_for_site", lambda leg, site: ["A", "C"])
+        url = ncei.file_url("carb", "204", "1244", "C")
+        requested = self._serve(monkeypatch, {url: fixture_bytes("ncei_carb_204_1244c.txt").decode()})
+        df, source = ncei.fetch("carbonates", "204", "1244")
+        assert len(requested) == 2 and len(df) == 3
+
+    def test_missing_file_and_unmeasured_type(self, monkeypatch):
+        from sod_explorer.sources import ncei
+        self._serve(monkeypatch, {})
+        with pytest.raises(SourceError, match="no Carbonates file"):
+            ncei.fetch("carbonates", "204", "1244", "C")
+        with pytest.raises(SourceError, match="not measured during ODP"):
+            ncei.fetch("rgb", "204", "1244", "C")
