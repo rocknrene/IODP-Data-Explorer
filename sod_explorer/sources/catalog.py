@@ -21,12 +21,12 @@ Each :class:`ReportType` records, for one generic name,
 
 LORE report names
 -----------------
-LORE identifies a report by a short internal name. The names of six
-reports (``gra``, ``mad``, ``pwl``, ``ngr``, ``tcon``, ``avs``) were
-verified against LORE's header service; each equals the lower-case LIMS
-analysis code. The remaining names could not be verified when this catalog
-was written and are listed as ordered *candidates*, the analysis code
-first. The LORE client requests the header of each candidate in turn and
+LORE identifies a report by a short internal name. The names of twelve
+reports have been verified against LORE's header service
+(:data:`VERIFIED_LORE_NAMES`); most equal the lower-case LIMS analysis
+code (downhole temperature is ``dhtemp``). The names of five geochemistry
+and strength reports (CARB, GE, IW, SRA, PEN) are not yet known and are
+listed as ordered *candidates*. The LORE client requests the header of each candidate in turn and
 uses the first that LORE recognizes
 (:func:`sod_explorer.sources.lore.resolve_report_name`). Run
 ``python -m sod_explorer.sources.check_lore`` to list which candidates
@@ -38,7 +38,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 #: LORE report names confirmed against LORE's header service.
-VERIFIED_LORE_NAMES = frozenset({"gra", "mad", "pwl", "ngr", "tcon", "avs"})
+VERIFIED_LORE_NAMES = frozenset({
+    "gra", "mad", "pwl", "ngr", "tcon", "avs",          # verified in the original application
+    "dhtemp", "pwc", "pwb", "rsc", "rgb", "tor",        # verified 2026-10-06 (live checks workflow)
+})
 
 
 @dataclass(frozen=True)
@@ -80,7 +83,7 @@ REPORT_TYPES: tuple[ReportType, ...] = (
     # Downhole
     ReportType("downhole_temperature", "Downhole temperature", "Downhole",
                odp_report="Downhole temperature",
-               lore_reports=(LoreReport("APCT-3/SET", ("apct", "apct3", "dhtemp", "downholetemp", "set")),),
+               lore_reports=(LoreReport("APCT-3/SET", ("dhtemp",)),),
                pangaea_term="downhole temperature"),
     # Geochemistry
     ReportType("carbonates", "Carbonates", "Geochemistry",
