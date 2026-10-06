@@ -10,7 +10,8 @@ application is deployed to. This module makes one small real request to
 each source and prints whether it succeeded:
 
 * LORE: moisture and density for Expedition 362, Hole U1480E.
-* LORE composite and renamed reports: carbonates for Hole U1480E;
+* LORE composite and renamed reports: carbonates, interstitial water, and
+  gas elements for Hole U1480E;
   penetrometer and source rock analysis for Site U1480 (absence of data
   for the Site is reported, not counted as a failure).
 * NOAA NCEI archive: carbonates for ODP Leg 204, Hole 1244C.
@@ -68,6 +69,14 @@ def _lore_carbonates() -> str:
             f"reports {source['query']['lims_reports']}")
 
 
+def _lore_composites() -> str:
+    parts = []
+    for key in ("interstitial_water", "gas_elements"):
+        df, _ = lore.fetch(key, "362", "U1480", "E")
+        parts.append(f"{key}: {len(df)} rows; columns {list(df.columns)}; first row {df.iloc[0].tolist()}")
+    return " | ".join(parts)
+
+
 def _lore_strength() -> str:
     parts = []
     for key in ("penetrometer", "source_rock"):
@@ -85,6 +94,7 @@ def _ncei() -> str:
 
 
 CHECKS = (("LORE", _lore), ("LORE carbonates", _lore_carbonates),
+          ("LORE interstitial water and gas elements", _lore_composites),
           ("LORE penetrometer and source rock", _lore_strength), ("NCEI", _ncei),
           ("PANGAEA", _pangaea), ("DSDP Data Access", _dsdp))
 
