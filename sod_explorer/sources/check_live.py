@@ -10,6 +10,9 @@ application is deployed to. This module makes one small real request to
 each source and prints whether it succeeded:
 
 * LORE: moisture and density for Expedition 362, Hole U1480E.
+* LORE composite and renamed reports: carbonates for Hole U1480E;
+  penetrometer and source rock analysis for Site U1480 (absence of data
+  for the Site is reported, not counted as a failure).
 * NOAA NCEI archive: carbonates for ODP Leg 204, Hole 1244C.
 * PANGAEA: a dataset search for Expedition 343 (Chikyu), and a download of
   the first dataset found that is not access-restricted (datasets under
@@ -59,12 +62,31 @@ def _dsdp() -> str:
     return f"{len(df)} rows of {source['rows_downloaded']} downloaded; columns {list(df.columns)[:6]}"
 
 
+def _lore_carbonates() -> str:
+    df, source = lore.fetch("carbonates", "362", "U1480", "E")
+    return (f"{len(df)} rows; columns {list(df.columns)}; first row {df.iloc[0].tolist()}; "
+            f"reports {source['query']['lims_reports']}")
+
+
+def _lore_strength() -> str:
+    parts = []
+    for key in ("penetrometer", "source_rock"):
+        try:
+            df, _ = lore.fetch(key, "362", "U1480", "")
+            parts.append(f"{key}: {len(df)} rows, {len(df.columns)} columns")
+        except SourceError as exc:
+            parts.append(f"{key}: {exc}")
+    return "; ".join(parts)
+
+
 def _ncei() -> str:
     df, source = ncei.fetch("carbonates", "204", "1244", "C")
     return f"{len(df)} rows, {len(df.columns)} columns; file {source['query']['files'][0]['url']}"
 
 
-CHECKS = (("LORE", _lore), ("NCEI", _ncei), ("PANGAEA", _pangaea), ("DSDP Data Access", _dsdp))
+CHECKS = (("LORE", _lore), ("LORE carbonates", _lore_carbonates),
+          ("LORE penetrometer and source rock", _lore_strength), ("NCEI", _ncei),
+          ("PANGAEA", _pangaea), ("DSDP Data Access", _dsdp))
 
 
 def main() -> int:
