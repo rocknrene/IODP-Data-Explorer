@@ -106,6 +106,14 @@ def fetch_dataset(pangaea_id: str) -> tuple[pd.DataFrame, dict]:
                                 headers={**_HEADERS, "Accept": "text/tab-separated-values"})
         response.raise_for_status()
         df, header = parse_tab_download(response.text)
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else None
+        if status in (401, 403):
+            raise SourceError(f"PANGAEA dataset {pangaea_id} is access-restricted (HTTP {status}): it requires "
+                              "a PANGAEA login, usually because it is still under moratorium. Choose "
+                              "another dataset, or download it from PANGAEA and use Local file "
+                              "upload.") from exc
+        raise SourceError(f"Could not download PANGAEA dataset {pangaea_id}: {exc}") from exc
     except requests.RequestException as exc:
         raise SourceError(f"Could not download PANGAEA dataset {pangaea_id}: {exc}") from exc
     except (pd.errors.ParserError, pd.errors.EmptyDataError) as exc:
