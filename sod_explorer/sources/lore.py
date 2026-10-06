@@ -142,6 +142,83 @@ def resolve_report_name(session: requests.Session, report: LoreReport) -> tuple[
     raise SourceError(f"LORE did not recognize a report name for {report.code} (tried: {tried})")
 
 
+#: Columns of ``carbonates_internal`` that identify a sample.
+_CARBONATE_SAMPLE_COLUMNS = ("Exp", "Site", "Hole", "Core", "Type", "Sect", "A/W", "Text ID",
+                             "Top offset on sect (cm)", "Bot offset on sect (cm)",
+                             "Depth CSF-A (m)", "Depth CSF-B (m)", "Sample comments")
+#: CHNS result columns of ``carbonates_internal`` and their names in LORE's Carbonates report.
+_CHNS_COLUMNS = {
+    "carbon_percent": "Total carbon (wt%)",
+    "hydrogen_percent": "Hydrogen (wt%)",
+    "nitrogen_percent": "Nitrogen (wt%)",
+    "sulfur_percent": "Sulfur (wt%)",
+    "carbon_organic_percent": "Organic carbon (wt%), CHNS with treated sample (wt%)",
+    "treatment_method": "Sample treatment method (CHNS organic carbon)",
+}
+#: Mass ratio CaCO3 / C used by LORE to convert inorganic carbon to calcium carbonate.
+CARBONATE_FACTOR = 8.333
+
+
+def assemble_carbonates(raw: pd.DataFrame) -> pd.DataFrame:
+    """Assemble LORE's Carbonates report from the rows of ``carbonates_internal``.
+
+    The internal report holds one row per test: a coulometric test (COUL)
+    reports inorganic carbon, and an elemental-analyzer test (CHNS) reports
+    total carbon, hydrogen, nitrogen, and sulfur, all in the same result
+    columns, distinguished by the ``Analysis`` column. Following LORE's
+    report definition (``/reference/ReportDefinitionGet-LORE?name=carbonates``),
+    the tests of a sample are placed on one row and two quantities are
+    computed:
+
+    * calcium carbonate (wt%) = inorganic carbon (wt%) x 8.333;
+    * organic carbon by difference (wt%) = total carbon - inorganic carbon.
+
+    Replicate tests of a sample are kept on separate rows (first COUL with
+    first CHNS, second with second, and so on); a ``Replicate`` column is
+    added when any sample has more than one. If the table does not have
+    the expected columns, it is returned unchanged.
+    """
+    if "Analysis" not in raw.columns or "carbon_percent" not in raw.columns:
+        return raw
+    keys = [c for c in _CARBONATE_SAMPLE_COLUMNS if c in raw.columns]
+    analysis = raw["Analysis"].astype(str).str.strip().str.upper()
+    blank = "\x00"   # groupby drops missing keys, so blanks are given a placeholder
+
+    def part(code: str, columns: dict[str, str]) -> pd.DataFrame:
+        present = {c: n for c, n in columns.items() if c in raw.columns}
+        rows = raw.loc[analysis == code, keys + list(present)].rename(columns=present)
+        rows[keys] = rows[keys].astype(object).where(rows[keys].notna(), blank)
+        rows["Replicate"] = rows.groupby(keys, sort=False).cumcount() + 1
+        return rows
+
+    coul = part("COUL", {"carbon_percent": "Inorganic carbon (wt%)"})
+    chns = part("CHNS", _CHNS_COLUMNS)
+    if coul.empty and chns.empty:
+        return raw
+    table = coul.merge(chns, on=keys + ["Replicate"], how="outer", sort=False)
+    table[keys] = table[keys].where(table[keys] != blank)
+    for column in ("Inorganic carbon (wt%)", "Total carbon (wt%)"):
+        if column not in table.columns:
+            table[column] = float("nan")
+        table[column] = pd.to_numeric(table[column], errors="coerce")
+    table["Calcium carbonate (wt%)"] = (table["Inorganic carbon (wt%)"] * CARBONATE_FACTOR).round(3)
+    table["Organic carbon (wt%) by difference (CHNS-COUL)"] = (
+        table["Total carbon (wt%)"] - table["Inorganic carbon (wt%)"]).round(2)
+
+    measured = ["Inorganic carbon (wt%)", "Calcium carbonate (wt%)", "Total carbon (wt%)",
+                "Organic carbon (wt%) by difference (CHNS-COUL)"]
+    measured += [n for n in _CHNS_COLUMNS.values() if n in table.columns and n not in measured]
+    identifiers = [k for k in keys if k != "Sample comments"]
+    order = identifiers + (["Replicate"] if table["Replicate"].max() > 1 else []) + measured
+    order += ["Sample comments"] if "Sample comments" in keys else []
+    for column in identifiers:
+        converted = pd.to_numeric(table[column], errors="coerce")
+        if converted.notna().sum() == table[column].notna().sum():
+            table[column] = converted
+    sort_by = [c for c in ("Site", "Hole", "Depth CSF-A (m)") if c in table.columns]
+    return table[order].sort_values(sort_by, kind="stable").reset_index(drop=True)
+
+
 @lru_cache(maxsize=CACHE_SIZE)
 def _fetch_cached(report: LoreReport, expedition: str, site: str, hole: str) -> tuple[pd.DataFrame, str]:
     """Retrieve one LIMS report from LORE. Raises :class:`SourceError` on failure.
@@ -193,6 +270,8 @@ def _fetch_cached(report: LoreReport, expedition: str, site: str, hole: str) -> 
     df = restrict_to_request(rows_to_frame(rows, headers), expedition, site, hole)
     if df.empty:
         raise SourceError(f"LORE returned {report.code} rows, but none for {where}")
+    if report.transform == "carbonates":
+        df = assemble_carbonates(df)
     return df, name
 
 
