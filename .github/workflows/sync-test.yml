@@ -1,0 +1,27 @@
+# Deploys the v2 branch to a separate test Space, so a new version can be
+# tried online without touching the public Space (which sync.yml deploys
+# from main). Create the Space rocknrene/SOD-Explorer-test (SDK: Docker)
+# first; the HF_IDE_TOKEN secret must have write access to it.
+name: deploy test space
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - v2
+
+jobs:
+  sync-to-test-space:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v2
+          fetch-depth: 0
+      - name: Push to the test Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_IDE_TOKEN }}
+        run: |
+          git config user.email "action@github.com"
+          git config user.name "GitHub Action"
+          git push https://rocknrene:$HF_TOKEN@huggingface.co/spaces/rocknrene/SOD-Explorer-test v2:main --force

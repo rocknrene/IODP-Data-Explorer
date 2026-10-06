@@ -1,0 +1,32 @@
+# Makes real requests to LORE, PANGAEA, and the DSDP Data Access application
+# and prints which succeed. Runs on every push to a branch other than main,
+# and on demand from the Actions tab ("Run workflow").
+name: live checks
+
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore:
+      - main
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: pip install -r requirements.txt
+      - name: LORE report names
+        if: always()
+        run: python -m sod_explorer.sources.check_lore
+      - name: Live requests to each source
+        if: always()
+        env:
+          CHROME_BIN: /usr/bin/google-chrome
+        run: |
+          export CHROMEDRIVER_PATH="${CHROMEWEBDRIVER}/chromedriver"
+          python -m sod_explorer.sources.check_live
