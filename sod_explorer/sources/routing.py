@@ -5,7 +5,8 @@ The rules follow the primary shipboard data sources listed in the
 (Childress, v1.0, September 2026). For DSDP, the guide lists NOAA NCEI as
 the primary archive and the DSDP Data Access application as its
 alternative; the NCEI files are not currently downloadable, so the
-alternative is used.
+alternative is used. For ODP, the guide lists NOAA NCEI, which is used
+with LORE as a fallback.
 
 Routing rules
 -------------
@@ -14,7 +15,8 @@ Program / platform            Source
 ============================  ====================================================
 DSDP (Glomar Challenger)      DSDP Data Access application; PANGAEA for the data
                               types whose DSDP source is PANGAEA (see catalog)
-ODP, IODP (JOIDES Resolution) LORE
+ODP (JOIDES Resolution)       NOAA NCEI archive; LORE as fallback
+IODP (JOIDES Resolution)      LORE
 IODP (Chikyu)                 PANGAEA; otherwise J-CORES export via file upload
 IODP (Mission-Specific)       PANGAEA
 ============================  ====================================================
@@ -27,10 +29,10 @@ platform cannot be inferred, are tried against LORE and then PANGAEA.
 
 LORE serves the LIMS database, which the JOIDES Resolution Science
 Operator adopted in 2009 (Expedition 317 onward in this table's
-numbering). Data from ODP Legs and from IODP expeditions 301 to 312
-predate LIMS and are archived by NOAA NCEI; a reader for that archive is
-not yet implemented, so such requests are directed to file upload when
-LORE returns no data.
+numbering). Data from ODP Legs predate LIMS and are read from the NOAA
+NCEI archive. IODP Expeditions 301 to 312 also predate LIMS; the layout
+of their files at NCEI has not yet been verified, so the ODP layout is
+tried and, if it fails, the request is directed to file upload.
 
 When PANGAEA returns exactly one screened candidate, it is downloaded
 directly; when it returns several, they are offered to the user.
@@ -48,7 +50,7 @@ from ..reference import (
     program_for_expedition,
     program_from_number,
 )
-from . import lore, pangaea, shinylaurel
+from . import lore, ncei, pangaea, shinylaurel
 from .catalog import get_report, report_label
 from .common import SourceError
 
@@ -159,24 +161,28 @@ def fetch(report_key: str, expedition: str, site: str = "", hole: str = "") -> F
     site = site or ""
     service_hole = "" if hole == UNLETTERED_HOLE else (hole or "")
     label = report_label(report_key)
-    report_type = get_report(report_key)
 
     try:
         if route.strategy == "dsdp":
             return _from_dsdp(route, report_key, site, hole or "")
 
         if route.strategy == "jr":
-            try:
-                df, source = lore.fetch(report_key, route.expedition, site, service_hole)
-            except SourceError as exc:
-                if _predates_lims(route.expedition):
-                    raise SourceError(
-                        f"{exc}. {route.program} Leg {route.expedition} predates the LIMS database "
-                        "served by LORE; these data are archived in Janus and at NOAA NCEI"
-                        + (f" as '{report_type.odp_report}'" if report_type and report_type.odp_report else "")
-                        + ". Use Local file upload.") from exc
-                raise
             word = "Leg" if route.program == "ODP" else "Expedition"
+            if _predates_lims(route.expedition):
+                try:
+                    df, source = ncei.fetch(report_key, route.expedition, site, service_hole)
+                    return FetchOutcome(f"NCEI {label}, {word} {route.expedition} ({len(df):,} rows)",
+                                        df=df, source=source)
+                except SourceError as ncei_error:
+                    try:
+                        df, source = lore.fetch(report_key, route.expedition, site, service_hole)
+                    except SourceError as lore_error:
+                        raise SourceError(
+                            f"{ncei_error}. LORE (fallback): {lore_error}. {route.program} {word} "
+                            f"{route.expedition} predates the LIMS database served by LORE. "
+                            "Check the Site and Hole, or use Local file upload.") from lore_error
+            else:
+                df, source = lore.fetch(report_key, route.expedition, site, service_hole)
             return FetchOutcome(f"LORE {label}, {word} {route.expedition} ({len(df):,} rows)",
                                 df=df, source=source)
 
