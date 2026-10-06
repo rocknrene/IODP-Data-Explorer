@@ -1,82 +1,112 @@
-"""Live checks of the data sources.
+"""Find the LORE report names that are still unknown.
 
-Run from a computer (or a GitHub Actions runner) with internet access::
-
-    python -m sod_explorer.sources.check_live
-
-The test suite replaces every network service with recorded responses, so
-it cannot detect a change in a live service or a block on the network the
-application is deployed to. This module makes one small real request to
-each source and prints whether it succeeded:
-
-* LORE: moisture and density for Expedition 362, Hole U1480E.
-* PANGAEA: a dataset search for Expedition 343 (Chikyu), and a download of
-  the first dataset found that is not access-restricted (datasets under
-  moratorium require a PANGAEA login and are skipped).
-* DSDP Data Access application: density and porosity for Leg 29, Site 277
-  (requires Chromium and chromedriver; see
-  :mod:`sod_explorer.sources.shinylaurel`).
-
-Each check is independent; a failure of one does not stop the others.
+Development aid, run by the ``live checks`` workflow. It (1) probes a wide
+list of candidate names against LORE's header service and (2) downloads the
+LORE page and the scripts it loads and prints every line that mentions a
+report name, so that names not guessed here can be read from LORE's own
+menu definition. Output goes to standard output.
 """
 
 from __future__ import annotations
 
+import re
+import sys
 import time
-import traceback
+from urllib.parse import urljoin
 
-from . import lore, pangaea, shinylaurel
-from .common import SourceError
+import requests
+
+HOST = "https://web.iodp.tamu.edu"
+PAGE = f"{HOST}/LORE/"
+HEADERS = {"User-Agent": "SOD-Explorer/2.0 (report-name discovery; github.com/rocknrene/IODP-Data-Explorer)",
+           "Referer": PAGE, "X-Requested-With": "XMLHttpRequest"}
+
+CANDIDATES = {
+    "CARB": ["carbonates", "carbonate", "coulometer", "coul", "chns", "carbon", "caco3", "ic",
+             "inorganiccarbon", "carbchns", "carb_chns", "carbreport", "elemental", "carbsummary", "coulchns",
+             "carbs", "chnscoul", "toc", "tc", "carbonatereport", "CARB", "Carbonates"],
+    "GE": ["gaselements", "gaselement", "gc3", "gcfid", "nga", "ngafid", "gassafety", "gasmonitoring",
+           "headspace", "hs", "vac", "gas_elements", "gasreport", "gassummary", "ge_report", "gasanalysis"],
+    "IW": ["iwreport", "interstitialwater", "porewater", "iwsummary", "iwchem", "icp", "icpaes",
+           "alkalinity", "alk", "iwmain", "water", "iw_report", "iws", "iwall", "iwdata", "iwcombined",
+           "spec", "titration", "salinity"],
+    "SRA": ["sourcerock", "sourcerockanalysis", "rockeval", "pyrolysis", "srasummary", "sra_report",
+            "srareport", "sraanalysis"],
+    "PEN": ["penetrometer", "penstrength", "pp", "ppen", "pocketpen", "compstrength", "strength",
+            "pen_report", "penreport", "handpen", "pentest", "penet", "PEN", "compressionalstrength"],
+}
+ENDPOINT_GUESSES = [
+    "/reference/ReportsGet-LORE", "/reference/ReportListGet-LORE", "/reference/MenuGet-LORE",
+    "/reference/AccordionGet-LORE", "/reference/ReportMenuGet-LORE", "/reference/ReportGet-LORE",
+    "/LORE/reports.json", "/LORE/menu.json", "/LORE/config.json",
+]
+KEYWORDS = re.compile(r"carb|interstitial|\biw\b|gas ?elements|source ?rock|\bsra\b|penetrometer|\bpen\b"
+                      r"|HeaderDisplayGet|reportName|report_name|AWorkingSetGet", re.IGNORECASE)
 
 
-def _lore() -> str:
-    df, source = lore.fetch("mad", "362", "U1480", "E")
-    return f"{len(df)} rows, {len(df.columns)} columns; reports {source['query']['lims_reports']}"
+def get(session: requests.Session, url: str, **kwargs):
+    time.sleep(0.4)
+    return session.get(url, timeout=40, **kwargs)
 
 
-def _pangaea() -> str:
-    results = pangaea.search('"Expedition 343" Chikyu', count=8)
-    if not results:
-        return "search returned no datasets (service reachable)"
-    restricted = []
-    for result in results:
+def main() -> None:
+    session = requests.Session()
+    session.headers.update(HEADERS)
+
+    print("== 1. Candidate names accepted by the header service")
+    for code, names in CANDIDATES.items():
+        found = []
+        for name in names:
+            try:
+                response = get(session, f"{HOST}/reference/HeaderDisplayGet-LORE",
+                               params={"name": name, "scaleid": "11331", "splice": "test"})
+                if response.ok and response.json().get("headers"):
+                    body = response.json()
+                    found.append(f"{name} -> title={body.get('title')!r} columns={len(body['headers'])}")
+            except (requests.RequestException, ValueError):
+                continue
+        print(f"{code}: {found or 'none of the candidates'}")
+
+    print("\n== 2. Guessed menu endpoints")
+    for path in ENDPOINT_GUESSES:
         try:
-            df, source = pangaea.fetch_dataset(result["value"])
-        except SourceError as exc:
-            if "access-restricted" not in str(exc):
-                raise
-            restricted.append(result["value"])
+            response = get(session, HOST + path)
+            print(f"{path}: HTTP {response.status_code} {response.text[:300]!r}")
+        except requests.RequestException as exc:
+            print(f"{path}: {exc}")
+
+    print("\n== 3. LORE page and scripts")
+    try:
+        page = get(session, PAGE).text
+    except requests.RequestException as exc:
+        print(f"could not load page: {exc}")
+        return
+    scripts = re.findall(r'<script[^>]+src=["\']([^"\']+)["\']', page, flags=re.IGNORECASE)
+    print(f"page length {len(page)}; scripts: {scripts}")
+    for line in page.splitlines():
+        if KEYWORDS.search(line):
+            print(f"PAGE: {line.strip()[:400]}")
+    budget = 400
+    for src in scripts:
+        url = urljoin(PAGE, src)
+        if "jquery" in url.lower() or not url.startswith(HOST):
             continue
-        return (f"{len(results)} datasets found; downloaded {result['value']} ({len(df)} rows); "
-                f"citation present: {bool(source.get('citation'))}; "
-                f"access-restricted and skipped: {restricted or 'none'}")
-    return f"{len(results)} datasets found, all access-restricted: {restricted}"
-
-
-def _dsdp() -> str:
-    df, source = shinylaurel.fetch("mad", "29", "277")
-    return f"{len(df)} rows of {source['rows_downloaded']} downloaded; columns {list(df.columns)[:6]}"
-
-
-CHECKS = (("LORE", _lore), ("PANGAEA", _pangaea), ("DSDP Data Access", _dsdp))
-
-
-def main() -> int:
-    """Run every check, print one line per source, and return the number that failed."""
-    failures = 0
-    for name, check in CHECKS:
-        started = time.time()
         try:
-            detail = check()
-        except Exception as exc:  # report any failure of a live service, whatever its type
-            failures += 1
-            print(f"FAIL  {name} ({time.time() - started:.0f} s): {type(exc).__name__}: {exc}")
-            traceback.print_exc(limit=1)
-        else:
-            print(f"PASS  {name} ({time.time() - started:.0f} s): {detail}")
-    print(f"\n{failures} of {len(CHECKS)} source(s) failed.")
-    return failures
+            text = get(session, url).text
+        except requests.RequestException as exc:
+            print(f"-- {url}: {exc}")
+            continue
+        print(f"-- {url} ({len(text)} characters)")
+        # Minified scripts have very long lines; split on statement ends first.
+        for piece in re.split(r"[;\n]", text):
+            if KEYWORDS.search(piece) and budget > 0:
+                print(f"   {piece.strip()[:500]}")
+                budget -= 1
+        # Other service endpoints named in the script.
+        endpoints = sorted(set(re.findall(r"[\w/]*(?:Get|List)-LORE", text)))
+        print(f"   endpoints: {endpoints}")
 
 
 if __name__ == "__main__":
-    raise SystemExit(1 if main() else 0)
+    main()
+    sys.exit(0)
