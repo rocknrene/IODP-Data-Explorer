@@ -291,10 +291,11 @@ tests/             Test suite and fixtures
 - Sites and holes for Expeditions 380, 389, and 405 are not yet in the
   reference table; these expeditions can be selected, but only with Site and
   Hole left blank.
-- The LORE names of five LIMS reports (CARB, GE, IW, SRA, PEN) are not yet
-  known, so carbonates, gas elements, interstitial water, source rock
-  analysis, and penetrometer strength cannot yet be retrieved for JOIDES
-  Resolution expeditions. The other twelve report names are verified.
+- LORE assembles three reports in the browser from an internal report:
+  carbonates, interstitial water, and gas elements. Carbonates is assembled
+  by this software following LORE's report definition; interstitial water
+  and gas elements are not yet assembled and cannot be retrieved for IODP
+  JOIDES Resolution expeditions (they can for ODP, from NCEI).
 - PANGAEA datasets under moratorium require a login and cannot be retrieved;
   the application reports this and asks for another dataset or a file upload.
 - DSDP retrieval automates the DSDP Data Access web application (used with
