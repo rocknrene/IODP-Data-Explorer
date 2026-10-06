@@ -1,0 +1,1140 @@
+== 1. Composite reports
+
+==== carbonates
+-- definition:
+{
+ "reportname": "carbonates",
+ "type": "COMPLEX",
+ "title": "Carbonates",
+ "sortorder": [
+  "sample.x_expedition",
+  "sample.x_site",
+  "sample.x_hole",
+  "x_sample_depth.top"
+ ],
+ "searchfilters": [
+  "test.analysis in ('COUL','CHNS','TOC')",
+  "test.status='D'",
+  "x_sample_depth.scale_id=11311"
+ ],
+ "components": [],
+ "replicatesortorder": [
+  "result.replicate_count"
+ ],
+ "internalreport": "carbonates_internal",
+ "analysiscol": "23",
+ "rowseperatorcol": [
+  "2",
+  "3",
+  "4",
+  "5",
+  "6",
+  "10"
+ ],
+ "formatdefinition": {
+  "columns": [
+   {
+    "header": {
+     "text": "Exp"
+    },
+    "col": "1",
+    "field": "x_expedition"
+   },
+   {
+    "header": {
+     "text": "Site"
+    },
+    "col": "2",
+    "field": "x_site"
+   },
+   {
+    "header": {
+     "text": "Hole"
+    },
+    "col": "3",
+    "field": "x_hole"
+   },
+   {
+    "header": {
+     "text": "Core"
+    },
+    "col": "4",
+    "field": "x_core"
+   },
+   {
+    "header": {
+     "text": "Type"
+    },
+    "col": "5",
+    "field": "x_core_type"
+   },
+   {
+    "header": {
+     "text": "Sect"
+    },
+    "col": "6",
+    "field": "x_section"
+   },
+   {
+    "header": {
+     "text": "A/W"
+    },
+    "col": "7",
+    "field": "x_sect_half"
+   },
+   {
+    "header": {
+     "text": "Top offset on section (cm)"
+    },
+    "col": "24",
+    "field": "x_sect_offset",
+    "fixed": "1"
+   },
+   {
+    "header": {
+     "text": "Bot offset on section (cm)"
+    },
+    "col": "25",
+    "field": "x_sect_offset_bot",
+    "fixed": "1"
+   },
+   {
+    "header": {
+     "text": "Top depth CSF-A (m)"
+    },
+    "col": "11",
+    "field": "top",
+    "fixed": "3"
+   },
+   {
+    "header": {
+     "variable": "Top depth scale_id (m)"
+    },
+    "col": "12",
+    "filtervariable": "scaleid",
+    "fixed": "3"
+   },
+   {
+    "template": [
+     {
+      "analysis": "COUL",
+      "fixedvalue": [
+       {
+        "source": "13",
+        "header": [
+         {
+          "text": "Inorganic carbon (wt%)"
+         }
+        ],
+        "sort": "a COUL",
+        "fixed": "3"
+       }
+      ]
+     },
+     {
+      "analysis": "CHNS",
+      "fixedvalue": [
+       {
+        "source": "13",
+        "header": [
+         {
+          "text": "Total carbon (wt%)"
+         }
+        ],
+        "sort": "b1 CHNS",
+        "fixed": "4"
+       },
+       {
+        "source": "14",
+        "header": [
+         {
+          "text": "Hydrogen (wt%)"
+         }
+        ],
+        "sort": "b2 CHNS",
+        "fixed": "4"
+       },
+       {
+        "source": "15",
+        "header": [
+         {
+          "text": "Nitrogen (wt%)"
+         }
+        ],
+        "sort": "b3 CHNS",
+        "fixed": "4"
+       },
+       {
+        "source": "16",
+        "header": [
+         {
+          "text": "Sulfur (wt%)"
+         }
+        ],
+        "sort": "b4 CHNS",
+        "fixed": "4"
+       },
+       {
+        "source": "17",
+        "header": [
+         {
+          "text": "Organic carbon (wt%), CHNS with treated sample (wt%)"
+         }
+        ],
+        "sort": "b5 CHNS",
+        "fixed": "2"
+       },
+       {
+        "source": "18",
+        "header": [
+         {
+          "text": "Sample treatment method (CHNS organic carbon)"
+         }
+        ],
+        "sort": "b7 CHNS",
+        "fixed": "2"
+       }
+      ]
+     },
+     {
+      "computed": [
+       {
+        "header": {
+         "text": "Organic carbon (wt%) by difference (CHNS-COUL)"
+        },
+        "sort": "b6 computed",
+        "firstvalue": {
+         "columnheader": "Total carbon (wt%)"
+        },
+        "operation": "subtract",
+        "secondvalue": {
+         "columnheader": "Inorganic carbon (wt%)"
+        },
+        "fixed": "2"
+       },
+       {
+        "header": {
+         "text": "Calcium carbonate (wt%)"
+        },
+        "sort": "b0 computed",
+        "firstvalue": {
+         "columnheader": "Inorganic carbon (wt%)"
+        },
+        "operation": "times",
+        "secondvalue": {
+         "constant": "8.333"
+        },
+        "fixed": "3"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "header": {
+     "text": "Sample comments"
+    },
+    "col": "9",
+    "field": "description"
+   }
+  ],
+  "grouping": "replicate_count",
+  "repeatgroup": "results"
+ }
+}
+-- headers of carbonates_internal: {"headers": ["sample_number", "Exp", "Site", "Hole", "Core", "Type", "Sect", "A/W", "Text ID", "Sample comments", "Offset (cm)", "Depth CSF-A (m)", "Depth CSF-B (m)", "carbon_percent", "hydrogen_percent", "nitrogen_percent", "sulfur_percent", "carbon_organic_percent", "treatment_method", "Timestamp (UTC)", "Instrument", "Instrument group", "Test No.", "Analysis", "Top offset on sect (cm)", "Bot offset on sect (cm)"], "title": "Carbonates"}
+   working set (location only): 277
+   40 rows for the first 40 tests; first 8:
+   ["7857271", "362", "U1480", "E", "1", "H", "1", "W", "CYL7857271", "", "124.00", "1.240", "1.240", "", "", "", "", "", "", "2016-08-16 14:59:41", "", "FLASH_EA", "99156491", "CHNS", "124.0", "125.0"]
+   ["7857271", "362", "U1480", "E", "1", "H", "1", "W", "CYL7857271", "", "124.00", "1.240", "1.240", "1.7235", "0.0000", "0.0408", "0.0000", "", "", "2016-08-20 20:13:00", "", "EA_112", "99386721", "CHNS", "124.0", "125.0"]
+   ["7857271", "362", "U1480", "E", "1", "H", "1", "W", "CYL7857271", "", "124.00", "1.240", "1.240", "1.3057", "", "", "", "", "", "2016-08-22 07:49:40", "", "COULOMETER", "99418381", "COUL", "124.0", "125.0"]
+   ["7857291", "362", "U1480", "E", "1", "H", "2", "W", "CYL7857291", "", "138.00", "2.730", "2.730", "", "", "", "", "", "", "2016-08-15 20:42:11", "", "FLASH_EA", "99114041", "CHNS", "138.0", "139.0"]
+   ["7857291", "362", "U1480", "E", "1", "H", "2", "W", "CYL7857291", "", "138.00", "2.730", "2.730", "4.4857", "0.0000", "0.0400", "0.0000", "", "", "2016-08-20 20:12:37", "", "EA_112", "99386611", "CHNS", "138.0", "139.0"]
+   ["7857291", "362", "U1480", "E", "1", "H", "2", "W", "CYL7857291", "", "138.00", "2.730", "2.730", "3.5893", "", "", "", "", "", "2016-08-22 09:40:12", "", "COULOMETER", "99419261", "COUL", "138.0", "139.0"]
+   ["7857311", "362", "U1480", "E", "1", "H", "4", "W", "CYL7857311", "", "138.00", "5.730", "5.730", "", "", "", "", "", "", "2016-08-15 20:33:35", "", "FLASH_EA", "99113931", "CHNS", "138.0", "139.0"]
+   ["7857311", "362", "U1480", "E", "1", "H", "4", "W", "CYL7857311", "", "138.00", "5.730", "5.730", "1.4276", "0.0000", "0.0588", "0.0000", "", "", "2016-08-20 20:12:35", "", "EA_112", "99386601", "CHNS", "138.0", "139.0"]
+   working set (location + definition filters): 277
+   working set (location + definition filters without scale): 277
+
+==== iw
+-- definition:
+{
+ "reportname": "iw",
+ "type": "COMPLEX",
+ "title": "Interstitial Water (IW)",
+ "sortorder": [
+  "sample.x_expedition",
+  "sample.x_site",
+  "sample.x_hole",
+  "x_sample_depth.top"
+ ],
+ "searchfilters": [
+  "test.analysis='ICPAES'",
+  "test.status='D'",
+  "x_sample_depth.scale_id=11311"
+ ],
+ "components": [],
+ "replicatesortorder": [
+  "result.replicate_count"
+ ],
+ "internalreport": "iw_internal",
+ "analysiscol": "33",
+ "rowseperatorcol": [
+  "11"
+ ],
+ "formatdefinition": {
+  "columns": [
+   {
+    "header": {
+     "text": "Exp"
+    },
+    "col": "1",
+    "field": "x_expedition"
+   },
+   {
+    "header": {
+     "text": "Site"
+    },
+    "col": "2",
+    "field": "x_site"
+   },
+   {
+    "header": {
+     "text": "Hole"
+    },
+    "col": "3",
+    "field": "x_hole"
+   },
+   {
+    "header": {
+     "text": "Core"
+    },
+    "col": "4",
+    "field": "x_core"
+   },
+   {
+    "header": {
+     "text": "Type"
+    },
+    "col": "5",
+    "field": "x_core_type"
+   },
+   {
+    "header": {
+     "text": "Sect"
+    },
+    "col": "6",
+    "field": "x_section"
+   },
+   {
+    "header": {
+     "text": "A/W"
+    },
+    "col": "7",
+    "field": "x_sect_half"
+   },
+   {
+    "header": {
+     "text": "Top offset on section (cm)"
+    },
+    "col": "34",
+    "field": "x_sect_offset",
+    "fixed": "1"
+   },
+   {
+    "header": {
+     "text": "Bot offset on section (cm)"
+    },
+    "col": "35",
+    "field": "x_sect_offset_bot",
+    "fixed": "1"
+   },
+   {
+    "header": {
+     "text": "Top depth CSF-A (m)"
+    },
+    "col": "11",
+    "field": "top",
+    "fixed": "3"
+   },
+   {
+    "header": {
+     "variable": "Top depth scale_id (m)"
+    },
+    "col": "12",
+    "filtervariable": "scaleid",
+    "fixed": "3"
+   },
+   {
+    "template": [
+     {
+      "analysis": "ICPAES",
+      "header": [
+       {
+        "col": "14"
+       },
+       {
+        "text": "</br>"
+       },
+       {
+        "col": "16"
+       },
+       {
+        "text": "nm </br>ICPAES"
+       }
+      ],
+      "sort": [
+       {
+        "order": [
+         {
+          "col": "13"
+         },
+         {
+          "col": "16"
+         }
+        ]
+       }
+      ],
+      "match": [
+       "14",
+       "16"
+      ],
+      "source": "15",
+      "fixed": "3",
+      "component": "concentration"
+     },
+     {
+      "analysis": "ALKALINITY",
+      "fixedvalue": [
+       {
+        "source": "18",
+        "header": [
+         {
+          "text": "Alkalinity (mM) ALKALINITY"
+         }
+        ],
+        "sort": "Alkalinity",
+        "fixed": "3"
+       },
+       {
+        "source": "19",
+        "header": [
+         {
+          "text": "pH (none) ALKALINITY"
+         }
+        ],
+        "sort": "PH",
+        "fixed": "3"
+       }
+      ]
+     },
+     {
+      "analysis": "TITRA_MAN",
+      "fixedvalue": [
+       {
+        "source": "21",
+        "header": [
+         {
+          "text": "Ammonium (mM) TITRA_MAN"
+         }
+        ],
+        "sort": "Ammonium",
+        "fixed": "3"
+       },
+       {
+        "source": "22",
+        "header": [
+         {
+          "text": "Calcium (mM) TITRA_MAN"
+         }
+        ],
+        "sort": "Calcium",
+        "fixed": "3"
+       },
+       {
+        "source": "23",
+        "header": [
+         {
+          "text": "Chloride (mM) TITRA_MAN"
+         }
+        ],
+        "sort": "Chloride",
+        "fixed": "3"
+       },
+       {
+        "source": "24",
+        "header": [
+         {
+          "text": "Magnesium (mM) TITRA_MAN"
+         }
+        ],
+        "sort": "Magnesium",
+        "fixed": "3"
+       },
+       {
+        "source": "25",
+        "header": [
+         {
+          "text": "Phosphate (mM) TITRA_MAN"
+         }
+        ],
+        "sort": "Phosphate",
+        "fixed": "3"
+       },
+       {
+        "source": "26",
+        "header": [
+         {
+          "text": "Sulfide (mM) TITRA_MAN"
+         }
+        ],
+        "sort": "Sulfide",
+        "fixed": "3"
+       }
+      ]
+     },
+     {
+      "analysis": "SALINITY",
+      "fixedvalue": [
+       {
+        "source": "17",
+        "header": [
+         {
+          "text": "Salinity SALINITY"
+         }
+        ],
+        "sort": "Salinity SALINITY",
+        "fixed": "3"
+       }
+      ]
+     },
+     {
+      "analysis": "DA",
+      "header": [
+       {
+        "col": "20"
+       },
+       {
+        "text": "(mM) </br>DA"
+       }
+      ],
+      "sort": [
+       {
+        "order": [
+         {
+          "col": "20"
+         }
+        ]
+       }
+      ],
+      "match": [
+       "20"
+      ],
+      "source": "15",
+      "fixed": "3",
+      "component": "concentration"
+     },
+     {
+      "analysis": "IC",
+      "header": [
+       {
+        "col": "20"
+       },
+       {
+        "text": "(mM) </br>IC"
+       }
+      ],
+      "sort": [
+       {
+        "order": [
+         {
+          "col": "20"
+         }
+        ]
+       }
+      ],
+      "match": [
+       "20"
+      ],
+      "source": "15",
+      "fixed": "3",
+      "component": "concentration"
+     },
+     {
+      "analysis": "SPEC",
+      "header": [
+       {
+        "col": "20"
+       },
+       {
+        "text": "(\u00c2\u00b5M) </br>SPEC"
+       }
+      ],
+      "sort": [
+       {
+        "order": [
+         {
+          "col": "20"
+         }
+        ]
+       }
+      ],
+      "match": [
+       "20"
+      ],
+      "source": "15",
+      "fixed": "3",
+      "component": "concentration"
+     }
+    ]
+   }
+  ],
+  "grouping": "replicate_count",
+  "repeatgroup": "results"
+ }
+}
+-- headers of iw_internal: {"headers": ["sample_number", "Exp", "Site", "Hole", "Core", "Type", "Sect", "A/W", "Text ID", "Comments", "Offset (cm)", "Top depth CSF-A (m)", "Top depth CSF-B (m)", "element_name", "calibrated_name", "concentration", "wavelength", "salinity", "alkalinity", "pH", "analyte", "ammonium", "calcium", "chloride", "magnesium", "phosphate", "sulfide", "carbon_percent", "units", "Timestamp (UTC)", "Instrument", "Instrument group", "Test No.", "Analysis", "Top offset on sect (cm)", "Bot offset on sect (cm)", "Sampling tool"], "title": "IW"}
+   working set (location only): 162
+   135 rows for the first 40 tests; first 8:
+   ["7853211", "362", "U1480", "E", "1", "H", "1", "", "LIQ7853211", "ship split, unacidified", "0.00", "1.250", "1.250", "", "", "", "", "", "3.036", "7.665", "", "", "", "", "", "", "", "", "NONE", "2016-08-13 13:27:57", "", "USER_INPUT", "98998741", "ALKALINITY", "125.0", "135.0", "SYRINGE"]
+   ["7853211", "362", "U1480", "E", "1", "H", "1", "", "LIQ7853211", "ship split, unacidified", "0.00", "1.250", "1.250", "", "", "557.911", "", "", "", "", "Chloride", "", "", "", "", "", "", "", "NONE", "2016-08-16 03:11:40", "", "MetrohmproIC", "99127921", "IC", "125.0", "135.0", "SYRINGE"]
+   ["7853211", "362", "U1480", "E", "1", "H", "1", "", "LIQ7853211", "ship split, unacidified", "0.00", "1.250", "1.250", "", "", "0.857141", "", "", "", "", "Bromide", "", "", "", "", "", "", "", "MILLIMOLAR", "2016-08-16 03:11:40", "", "MetrohmproIC", "99127921", "IC", "125.0", "135.0", "SYRINGE"]
+   ["7853211", "362", "U1480", "E", "1", "H", "1", "", "LIQ7853211", "ship split, unacidified", "0.00", "1.250", "1.250", "", "", "28.362", "", "", "", "", "Sulfate", "", "", "", "", "", "", "", "MILLIMOLAR", "2016-08-16 03:11:40", "", "MetrohmproIC", "99127921", "IC", "125.0", "135.0", "SYRINGE"]
+   ["7853211", "362", "U1480", "E", "1", "H", "1", "", "LIQ7853211", "ship split, unacidified", "0.00", "1.250", "1.250", "", "", "477.994", "", "", "", "", "Sodium", "", "", "", "", "", "", "", "NONE", "2016-08-16 03:11:40", "", "MetrohmproIC", "99127921", "IC", "125.0", "135.0", "SYRINGE"]
+   ["7853211", "362", "U1480", "E", "1", "H", "1", "", "LIQ7853211", "ship split, unacidified", "0.00", "1.250", "1.250", "", "", "11.641", "", "", "", "", "Potassium", "", "", "", "", "", "", "", "MILLIMOLAR", "2016-08-16 03:11:40", "", "MetrohmproIC", "99127921", "IC", "125.0", "135.0", "SYRINGE"]
+   ["7853211", "362", "U1480", "E", "1", "H", "1", "", "LIQ7853211", "ship split, unacidified", "0.00", "1.250", "1.250", "", "", "10.857", "", "", "", "", "Calcium", "", "", "", "", "", "", "", "MILLIMOLAR", "2016-08-16 03:11:40", "", "MetrohmproIC", "99127921", "IC", "125.0", "135.0", "SYRINGE"]
+   ["7853211", "362", "U1480", "E", "1", "H", "1", "", "LIQ7853211", "ship split, unacidified", "0.00", "1.250", "1.250", "", "", "52.434", "", "", "", "", "Magnesium", "", "", "", "", "", "", "", "NONE", "2016-08-16 03:11:40", "", "MetrohmproIC", "99127921", "IC", "125.0", "135.0", "SYRINGE"]
+   working set (location + definition filters): 19
+   working set (location + definition filters without scale): 19
+
+==== gaselements
+-- definition:
+{
+ "reportname": "gaselements",
+ "type": "COMPLEX",
+ "title": "Gas Elements",
+ "sortorder": [
+  "sample.x_expedition",
+  "sample.x_site",
+  "sample.x_hole",
+  "x_sample_depth.top"
+ ],
+ "searchfilters": [
+  "test.analysis='ICPAES'",
+  "test.status='D'",
+  "x_sample_depth.scale_id=11311"
+ ],
+ "components": [],
+ "replicatesortorder": [
+  "result.replicate_count"
+ ],
+ "internalreport": "gaselements_internal",
+ "analysiscol": "36",
+ "rowseperatorcol": [
+  "35"
+ ],
+ "formatdefinition": {
+  "columns": [
+   {
+    "header": {
+     "text": "Exp"
+    },
+    "col": "1",
+    "field": "x_expedition"
+   },
+   {
+    "header": {
+     "text": "Site"
+    },
+    "col": "2",
+    "field": "x_site"
+   },
+   {
+    "header": {
+     "text": "Hole"
+    },
+    "col": "3",
+    "field": "x_hole"
+   },
+   {
+    "header": {
+     "text": "Core"
+    },
+    "col": "4",
+    "field": "x_core"
+   },
+   {
+    "header": {
+     "text": "Type"
+    },
+    "col": "5",
+    "field": "x_core_type"
+   },
+   {
+    "header": {
+     "text": "Sect"
+    },
+    "col": "6",
+    "field": "x_section"
+   },
+   {
+    "header": {
+     "text": "A/W"
+    },
+    "col": "7",
+    "field": "x_sect_half"
+   },
+   {
+    "header": {
+     "text": "Top offset on section (cm)"
+    },
+    "col": "37",
+    "field": "x_sect_offset",
+    "fixed": "1"
+   },
+   {
+    "header": {
+     "text": "Bottom offset on section (cm)"
+    },
+    "col": "38",
+    "field": "x_sect_offset_bot",
+    "fixed": "1"
+   },
+   {
+    "header": {
+     "text": " Top depth CSF-A (m)"
+    },
+    "col": "11",
+    "field": "top",
+    "fixed": "3"
+   },
+   {
+    "header": {
+     "variable": "Top depth scale_id (m)"
+    },
+    "col": "12",
+    "filtervariable": "scaleid",
+    "fixed": "3"
+   },
+   {
+    "header": {
+     "text": "Test list"
+    },
+    "col": "39",
+    "field": "x_test_list"
+   },
+   {
+    "template": [
+     {
+      "analysis": "GC3",
+      "fixedvalue": [
+       {
+        "source": "13",
+        "header": [
+         {
+          "text": "Methane (ppmv) GC3"
+         }
+        ],
+        "sort": "C1H4 GC3",
+        "fixed": "2"
+       },
+       {
+        "source": "14",
+        "header": [
+         {
+          "text": "Ethane (ppmv) GC3"
+         }
+        ],
+        "sort": "C2H4 GC3",
+        "fixed": "2"
+       },
+       {
+        "source": "15",
+        "header": [
+         {
+          "text": "Ethene (ppmv) GC3"
+         }
+        ],
+        "sort": "C2H2 GC3",
+        "fixed": "2"
+       },
+       {
+        "source": "16",
+        "header": [
+         {
+          "text": "Propane (ppmv) GC3"
+         }
+        ],
+        "sort": "C3H8 GC3",
+        "fixed": "2"
+       },
+       {
+        "source": "17",
+        "header": [
+         {
+          "text": "Propene (ppmv) GC3"
+         }
+        ],
+        "sort": "C3H6 GC3",
+        "fixed": "2"
+       },
+       {
+        "source": "41",
+        "header": [
+         {
+          "text": "c1_heavy % GC3"
+         }
+        ],
+        "sort": "c1_heavy GC3",
+        "fixed": "2"
+       },
+       {
+        "source": "42",
+        "header": [
+         {
+          "text": "c1_c2_gc3 % GC3"
+         }
+        ],
+        "sort": "c1_c2_gc3 GC3",
+        "fixed": "2"
+       }
+      ]
+     },
+     {
+      "analysis": "NGAFID",
+      "fixedvalue": [
+       {
+        "source": "13",
+        "header": [
+         {
+          "text": "Methane (ppmv) NGA-FID"
+         }
+        ],
+        "sort": "C1H4 NGAFID",
+        "fixed": "2"
+       },
+       {
+        "source": "14",
+        "header": [
+         {
+          "text": "Ethane (ppmv) NGA-FID"
+         }
+        ],
+        "sort": "C2H4 NGAFID",
+        "fixed": "2"
+       },
+       {
+        "source": "15",
+        "header": [
+         {
+          "text": "Ethene (ppmv) NGA-FID"
+         }
+        ],
+        "sort": "C2H2 NGAFID",
+        "fixed": "2"
+       },
+       {
+        "source": "16",
+        "header": [
+         {
+          "text": "Propane (ppmv) NGA-FID"
+         }
+        ],
+        "sort": "C3H8 NGAFID",
+        "fixed": "2"
+       },
+       {
+        "source": "17",
+        "header": [
+         {
+          "text": "Propene (ppmv) NGA-FID"
+         }
+        ],
+        "sort": "C3H6 NGAFID",
+        "fixed": "2"
+       },
+       {
+        "source": "26",
+        "header": [
+         {
+          "text": "Propene+Propane (ppmv) NGA-FID"
+         }
+        ],
+        "sort": "C3H8A NGAFID",
+        "fixed": "2"
+       },
+       {
+        "source": "18",
+        "header": [
+         {
+          "text": "iso-Butane (ppmv) NGA-FID"
+         }
+        ],
+        "sort": "C4H10A NGAFID",
+        "fixed": "2"
+       },
+       {
+        "source": "19",
+        "header": [
+         {
+          "text": "n-Butane (ppmv) NGA-FID"
+         }
+        ],
+        "sort": "C4H10B NGAFID",
+        "fixed": "2"
+       },
+       {
+        "source": "20",
+        "header": [
+         {
+          "text": "iso-pentane (ppmv) NGA-FID"
+         }
+        ],
+        "sort": "C5H12A NGAFID",
+        "fixed": "2"
+       },
+       {
+        "source": "21",
+        "header": [
+         {
+          "text": "n-pentane (ppmv) NGA-FID"
+         }
+        ],
+        "sort": "C5H12B NGAFID",
+        "fixed": "2"
+       },
+       {
+        "source": "22",
+        "header": [
+         {
+          "text": "iso-hexane (ppmv) NGA-FID"
+         }
+        ],
+        "sort": "C6H14A NGAFID",
+        "fixed": "2"
+       },
+       {
+        "source": "23",
+        "header": [
+         {
+          "text": "n-hexane (ppmv) NGA-FID"
+         }
+        ],
+        "sort": "C6H14B NGAFID",
+        "fixed": "2"
+       },
+       {
+        "source": "24",
+        "header": [
+         {
+          "text": "iso-heptane (ppmv) NGA-FID"
+         }
+        ],
+        "sort": "C7H16A NGAFID",
+        "fixed": "2"
+       },
+       {
+        "source": "25",
+        "header": [
+         {
+          "text": "n-heptane (ppmv) NGA-FID"
+         }
+        ],
+        "sort": "C7H16B NGAFID",
+        "fixed": "2"
+       },
+       {
+        "source": "40",
+        "header": [
+         {
+          "text": "c1_c2_nga % NGA-FID"
+         }
+        ],
+        "sort": "c1_c2_nga NGAFID",
+        "fixed": "2"
+       },
+       {
+        "source": "41",
+        "header": [
+         {
+          "text": "c1_heavy % NGA-FID"
+         }
+        ],
+        "sort": "c1_heavy NGAFID",
+        "fixed": "2"
+       }
+      ]
+     },
+     {
+      "analysis": "NGATCD",
+      "fixedvalue": [
+       {
+        "source": "13",
+        "header": [
+         {
+          "text": "Methane (ppmv) NGA-TCD"
+         }
+        ],
+        "sort": "C1H4 NGATCD",
+        "fixed": "2"
+       },
+       {
+        "source": "14",
+        "header": [
+         {
+          "text": "Ethane (ppmv) NGA-TCD"
+         }
+        ],
+        "sort": "C2H4 NGATCD",
+        "fixed": "2"
+       },
+       {
+        "source": "15",
+        "header": [
+         {
+          "text": "Ethene (ppmv) NGA-TCD"
+         }
+        ],
+        "sort": "C2H2 NGATCD",
+        "fixed": "2"
+       },
+       {
+        "source": "16",
+        "header": [
+         {
+          "text": "Propane (ppmv) NGA-TCD"
+         }
+        ],
+        "sort": "C3H8 NGATCD",
+        "fixed": "2"
+       },
+       {
+        "source": "17",
+        "header": [
+         {
+          "text": "Propene (ppmv) NGA-TCD"
+         }
+        ],
+        "sort": "C3H6 NGATCD",
+        "fixed": "2"
+       },
+       {
+        "source": "27",
+        "header": [
+         {
+          "text": "Nitrogen (ppmv) NGA-TCD"
+         }
+        ],
+        "sort": "Z1 N2",
+        "fixed": "2"
+       },
+       {
+        "source": "28",
+        "header": [
+         {
+          "text": "Oxygen (ppmv) NGA-TCD"
+         }
+        ],
+        "sort": "Z2 O2",
+        "fixed": "2"
+       },
+       {
+        "source": "29",
+        "header": [
+         {
+          "text": "Hydrogen sulfide (ppmv) NGA-TCD"
+         }
+        ],
+        "sort": "Z3 H2S",
+        "fixed": "2"
+       },
+       {
+        "source": "30",
+        "header": [
+         {
+          "text": "Carbon Dioxide (ppmv) NGA-TCD"
+         }
+        ],
+        "sort": "Z4 CO2",
+        "fixed": "2"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "header": {
+     "text": "Text ID"
+    },
+    "col": "8",
+    "field": "text_id"
+   },
+   {
+    "header": {
+     "text": "Test No."
+    },
+    "col": "35",
+    "field": "test_number"
+   },
+   {
+    "header": {
+     "text": "Sample comments"
+    },
+    "col": "9",
+    "field": "description"
+   },
+   {
+    "header": {
+     "text": "Test comments"
+    },
+    "col": "43",
+    "field": "test_comment"
+   },
+   {
+    "header": {
+     "text": "Result comments"
+    },
+    "col": "44",
+    "field": "entry"
+   }
+  ],
+  "grouping": "replicate_count",
+  "repeatgroup": "results"
+ }
+}
+-- headers of gaselements_internal: {"headers": ["sample_number", "Exp", "Site", "Hole", "Core", "Type", "Sect", "A/W", "Text ID", "Sample comments", "Offset (cm)", "Depth CSF-A (m)", "Depth CSF-B (m)", "methane", "ethane", "ethene", "propane", "propene", "iso_butane", "n_butane", "iso_pentane", "n_pentane", "iso_hexane", "n_hexane", "iso_heptane", "n_heptane", "propane_propene", "nitrogen", "oxygen", "hydrogen_sulfide", "carbon_dioxide", "units", "Timestamp (UTC)", "Instrument", "Instrument group", "Test No.", "Analysis", "Top offset on sect (cm)", "Bot offset on sect (cm)", "Test list", "c1_c2_nga", "c1_heavy", "c1_c2_gc3", "Test comments", "Result comments"], "title": "Gas Elements"}
+   working set (location only): 12
+   12 rows for the first 12 tests; first 8:
+   ["7853111", "362", "U1480", "E", "1", "H", "4", "", "CYL7853111", "", "0.00", "4.350", "4.350", "1.70", "0.00", "0.00", "0.00", "0.00", "", "", "", "", "", "", "", "", "", "", "", "", "", "PPMV", "2016-08-13 07:02:12", "", "GC3", "98994901", "GC3", "0.0", "5.0", "HS", "", "", "", "", ""]
+   ["7853881", "362", "U1480", "E", "2", "H", "4", "", "CYL7853881", "", "0.00", "12.300", "12.167", "1.71", "0.00", "0.00", "0.00", "0.00", "", "", "", "", "", "", "", "", "", "", "", "", "", "NONE", "2016-08-13 08:10:43", "", "GC3", "98995391", "GC3", "0.0", "5.0", "HS", "", "", "", "", ""]
+   ["7854771", "362", "U1480", "E", "3", "H", "4", "", "CYL7854771", "", "0.00", "21.800", "21.667", "1.79", "0.00", "0.00", "0.00", "0.00", "", "", "", "", "", "", "", "", "", "", "", "", "", "PPMV", "2016-08-13 09:31:44", "", "GC3", "98996421", "GC3", "0.0", "5.0", "HS", "", "", "", "", ""]
+   ["7855651", "362", "U1480", "E", "4", "H", "2", "", "CYL7855651", "", "0.00", "28.300", "28.294", "1.86", "0.00", "0.00", "0.00", "0.00", "", "", "", "", "", "", "", "", "", "", "", "", "", "PPMV", "2016-08-13 15:57:08", "", "GC3", "99000121", "GC3", "0.0", "5.0", "HS", "", "", "", "", ""]
+   ["7856281", "362", "U1480", "E", "5", "H", "2", "", "CYL7856281", "", "0.00", "33.055", "33.055", "2.13", "0.00", "0.00", "0.00", "0.00", "", "", "", "", "", "", "", "", "", "", "", "", "", "NONE", "2016-08-13 15:56:34", "", "GC3", "99000111", "GC3", "0.0", "5.0", "HS", "", "", "", "", ""]
+   ["7856651", "362", "U1480", "E", "6", "H", "3", "", "CYL7856651", "", "0.00", "44.100", "44.100", "2.19", "0.00", "0.00", "0.00", "0.00", "", "", "", "", "", "", "", "", "", "", "", "", "", "PPMV", "2016-08-13 15:55:40", "", "GC3", "99000031", "GC3", "0.0", "5.0", "HS", "", "", "", "", ""]
+   ["7857121", "362", "U1480", "E", "7", "H", "2", "", "CYL7857121", "", "0.00", "51.760", "51.760", "2.22", "0.00", "0.00", "0.00", "0.00", "", "", "", "", "", "", "", "", "", "", "", "", "", "NONE", "2016-08-13 15:53:09", "", "GC3", "98999981", "GC3", "0.0", "5.0", "HS", "", "", "", "", ""]
+   ["7857521", "362", "U1480", "E", "8", "H", "1", "", "CYL7857521", "", "0.00", "60.100", "60.100", "3.37", "0.00", "0.00", "0.00", "0.00", "", "", "", "", "", "", "", "", "", "", "", "", "", "PPMV", "2016-08-13 17:02:52", "", "GC3", "99000621", "GC3", "0.0", "5.0", "HS", "", "", "", "", ""]
+   working set (location + definition filters): 0
+   working set (location + definition filters without scale): 0
+
+== 2. Standard reports
+
+==== penetrate
+-- headers of penetrate: {"headers": ["Exp", "Site", "Hole", "Core", "Type", "Sect", "A/W", "Offset (cm)", "Depth CSF-A (m)", "Depth CSF-B (m)", "Compressional strength (KG/CM2)", "Penetration direction", "Adapter foot identifier", "Timestamp (UTC)", "Instrument", "Text ID", "Test No.", "Sample comments", "Test comments", "Result comments"], "title": "Compressional Strength Penetrometer (PEN)"}
+   working set (location only): 62
+   40 rows for the first 40 tests; first 8:
+   ["362", "U1480", "E", "1", "H", "1", "W", "80.0", "0.800", "0.800", "0.10", "X-POS", "YES", "2016-08-13 18:54:30", "PENETROMR", "SHLF7852881", "99001961", "", "", ""]
+   ["362", "U1480", "E", "1", "H", "2", "W", "101.0", "2.360", "2.360", "0.16", "X-POS", "YES", "2016-08-13 19:11:48", "PENETROMR", "SHLF7852911", "99002011", "", "", ""]
+   ["362", "U1480", "E", "1", "H", "3", "W", "77.0", "3.620", "3.620", "0.19", "X-POS", "YES", "2016-08-13 18:38:43", "PENETROMR", "SHLF7852941", "99001691", "", "", ""]
+   ["362", "U1480", "E", "1", "H", "4", "W", "79.0", "5.140", "5.140", "0.60", "X-POS", "NO", "2016-08-13 18:16:06", "PENETROMR", "SHLF7852971", "99001131", "", "", ""]
+   ["362", "U1480", "E", "1", "H", "5", "W", "92.0", "6.770", "6.770", "0.24", "X-POS", "YES", "2016-08-13 17:54:35", "PENETROMR", "SHLF7853001", "99000931", "", "", ""]
+   ["362", "U1480", "E", "1", "H", "6", "W", "43.0", "7.380", "7.380", "0.80", "X-POS", "NO", "2016-08-13 17:58:12", "PENETROMR", "SHLF7853031", "99001051", "", "", ""]
+   ["362", "U1480", "E", "2", "H", "1", "W", "111.0", "8.910", "8.877", "2.20", "X-POS", "NO", "2016-08-13 20:05:15", "PENETROMR", "SHLF7853611", "99002901", "", "", ""]
+   ["362", "U1480", "E", "2", "H", "2", "W", "41.0", "9.710", "9.654", "1.75", "X-POS", "NO", "2016-08-13 20:22:46", "PENETROMR", "SHLF7853641", "99003561", "", "", ""]
+
+==== sranl
+-- headers of sranl: {"headers": ["Exp", "Site", "Hole", "Core", "Type", "Sect", "A/W", "Top offset on section (cm)", "Bottom offset on section (cm)", "Depth CSF-A (m)", "Depth CSF-B (m)", "S1 (mg HC/g C)", "S2 (mg HC/g C)", "S3 (mg HC/g C)", "Tmax (\u00c2\u00b0C)", "TOC (wt%)", "Hydrogen index (HI) (n/a)", "Oxygen index (OI) (n/a)", "Production index (PI) (n/a)", "Pyrolysis carbon (PC) (mg/g)", "Timestamp (UTC)", "Text ID", "Test No.", "Sample comments", "Test comments", "Result comments"], "title": "Source Rock Analysis (SRA)"}
+   working set (location only): 0
+
+==== pwcdiscrete
+-- headers of pwcdiscrete: {"headers": ["Exp", "Site", "Hole", "Core", "Type", "Sect", "A/W", "Offset on section (cm)", "Offset (cm)", "Top depth CSF-A (m)", "Bot depth CSF-A (m)", "Top depth CSF-B (m)", "Bot depth CSF-B (m)", "P-wave velocity x (m/s)", "P-wave velocity y (m/s)", "P-wave velocity z (m/s)", "P-wave velocity unknown (m/s)", "Caliper separation (mm)", "Sonic traveltime (\u00c2\u00b5s)", "P-wave velocity x [manual] (m/s)", "P-wave velocity y [manual] (m/s)", "P-wave velocity z [manual] (m/s)", "P-wave velocity unknown [manual] (m/s)", "Sonic traveltime [manual] (\u00c2\u00b5s)", "Timestamp (UTC)", "Instrument", "Instrument group", "Text ID", "Test No.", "Sample comments", "Test comments", "Result comments"], "title": "P-Wave Velocity, Caliper System (PWC discrete)"}
+   working set (location only): 0
