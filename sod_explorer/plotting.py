@@ -1,507 +1,413 @@
-"""Page layout of the Dash application.
+"""Figure builders for the Legacy Data and Shipboard views.
 
-The page has two tabs:
+All builders are pure functions of a table and display options and return
+a :class:`plotly.graph_objects.Figure`.
 
-Legacy Data
-    Retrieval of one dataset, or of two datasets (A and B) that are merged
-    by depth, from public archives or files, with comparison plots.
-Shipboard
-    Exploration of a single uploaded file: summary statistics, scatter,
-    line, histogram, correlation matrix, and multi-track depth log with an
-    optional lithology track.
-
-Explanatory text is placed behind an information button (ⓘ) beside each
-section label, so that the sidebars show only the controls by default.
+Conventions
+-----------
+* Depth increases downward on every depth axis.
+* Axis titles use the depth column header, which names the depth scale
+  (for example "Depth CSF-A (m)"); no scale is assumed.
+* When a table contains several Holes, each Hole is drawn as a separate
+  line segment, so that lines never connect samples from different Holes.
 """
 
 from __future__ import annotations
 
-from dash import dcc, html
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
-from . import __version__
-from .reference import ALL_EXPEDITIONS
-from .sources.catalog import menu_options
-from .theme import (
-    CARD,
-    CHECK_INPUT,
-    CHECK_LABEL,
-    DROPDOWN,
-    FONT,
-    HINT,
-    INPUT,
-    LABEL,
-    button,
-    css_variables,
+from .analysis import (
+    comment_flagged,
+    core_tops,
+    correlate,
+    correlation_matrix,
+    depth_window_mean,
+    detrend_by_depth,
+    find_sampling_gaps,
 )
+from .columns import canonical_scale, depth_scale, hole_key_columns, measurement_columns
+from .theme import FONT, lithology_color, palette, series_colors
 
-ACCEPTED_DATA = ".csv  .tsv  .txt  .xlsx  .xls  .las  .zip"
-ACCEPTED_LITHOLOGY = ".csv  .tsv  .xlsx  .zip"
-
-
-def _css_block(theme: str) -> str:
-    """CSS custom-property declarations of a theme, for the ``:root`` rule."""
-    return "; ".join(f"{k}:{v}" for k, v in css_variables(theme).items())
+MAX_HEATMAP_COLUMNS = 30
 
 
-INDEX_STRING = """<!DOCTYPE html>
-<html>
-<head>
-{%metas%}
-<title>SOD Explorer</title>
-{%favicon%}
-{%css%}
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Didact+Gothic&display=swap" rel="stylesheet">
-<style>
-  :root { """ + _css_block("dark") + """ }
-  html, body, #react-entry-point { height:auto !important; min-height:100%; overflow-y:auto !important; }
-  body { background:var(--bg) !important; color:var(--text) !important;
-         font-family:""" + FONT + """; }
-  .Select-menu-outer,.VirtualizedSelectOption,.Select-option
-    { background-color:var(--dd-bg)!important; color:var(--text)!important; }
-  .Select-option:hover,.Select-option.is-focused
-    { background-color:var(--dd-hover)!important; color:var(--accent)!important; }
-  .Select-value-label,.Select-placeholder,.Select--single .Select-value { color:var(--text)!important; }
-  .Select-control { background-color:var(--dd-bg)!important; border-color:var(--border)!important;
-                    color:var(--text)!important; }
-  .Select-input input { color:var(--text)!important; background:transparent!important; }
-  .Select-value { background-color:var(--dd-hover)!important; border-color:var(--accent)!important;
-                  color:var(--text)!important; }
-  .Select-arrow { border-top-color:var(--muted)!important; }
-  .dash-dropdown, .dash-dropdown-content, .dash-dropdown-search
-    { background-color:var(--dd-bg)!important; color:var(--text)!important; border-color:var(--border)!important; }
-  .dash-dropdown-value, .dash-dropdown-content .dash-options-list-option { color:var(--text)!important; }
-  .dash-dropdown-placeholder { color:var(--muted)!important; }
-  .dash-dropdown-content { max-height:min(420px, 70vh)!important; }
-  .dash-dropdown-content .dash-options-list-option:hover,
-  .dash-dropdown-content .dash-options-list-option[data-highlighted],
-  .dash-dropdown-content .dash-options-list-option.selected
-    { background-color:var(--dd-hover)!important; color:var(--accent)!important; }
-  .dash-spreadsheet-container .dash-spreadsheet-inner th
-    { background-color:var(--bg)!important; color:var(--accent)!important; }
-  .dash-spreadsheet-container .dash-spreadsheet-inner td
-    { background-color:var(--panel)!important; color:var(--text)!important; }
-  .tab { background-color:var(--panel)!important; color:var(--muted)!important; }
-  .tab--selected { background-color:var(--bg)!important; color:var(--text)!important; }
-  * { transition: background-color 0.25s, color 0.25s, border-color 0.25s; }
-  .dash-spreadsheet-container { scrollbar-width:auto; scrollbar-color:var(--muted) var(--bg); }
-  .dash-spreadsheet-container::-webkit-scrollbar { height:12px; width:12px; }
-  .dash-spreadsheet-container::-webkit-scrollbar-track { background:var(--bg); }
-  .dash-spreadsheet-container::-webkit-scrollbar-thumb { background:var(--muted); border-radius:6px;
-                                                         border:2px solid var(--bg); }
-  /* On a phone the chart toolbar would cover the chart title, and pinch and drag replace it. */
-  @media (max-width: 700px) { .js-plotly-plot .modebar-container { display:none !important; } }
-  .info-summary { list-style:none; }
-  .info-summary::-webkit-details-marker { display:none; }
-  .info-icon { font-size:13px; letter-spacing:0; color:var(--accent); padding-left:8px; }
-  details[open] > .info-summary .info-icon { color:var(--text); }
-</style>
-</head>
-<body>
-{%app_entry%}
-<footer>{%config%}{%scripts%}{%renderer%}</footer>
-<script>
-  // When a menu opens, place the cursor in its search box, so that typing filters the list
-  // even if a value is already selected (the menu otherwise puts the cursor on that value).
-  document.addEventListener("click", function (event) {
-    if (!event.target.closest || !event.target.closest(".dash-dropdown")) { return; }
-    setTimeout(function () {
-      var box = document.querySelector(".dash-dropdown-content input.dash-dropdown-search");
-      if (box && document.activeElement !== box) { box.focus(); box.select(); }
-    }, 60);
-  });
-</script>
-</body>
-</html>"""
+# ---------------------------------------------------------------------------
+# Common layout
+# ---------------------------------------------------------------------------
 
-TAB_STYLE = {"backgroundColor": "var(--panel)", "color": "var(--muted)",
-             "border": "1px solid var(--border)", "borderBottom": "none",
-             "fontFamily": FONT, "fontSize": "13px", "padding": "8px 20px"}
-TAB_SELECTED = {**TAB_STYLE, "backgroundColor": "var(--bg)", "color": "var(--text)",
-                "borderBottom": "1px solid var(--bg)", "fontWeight": "600"}
-DIVIDER = {"borderColor": "var(--border)", "margin": "14px 0"}
-CONTROL_ITEM = {"flex": "1 1 180px", "minWidth": "160px"}
-CONTROL_LABEL = {**LABEL, "marginTop": "0"}
-STATUS_BOX = {"flex": "1", "background": "var(--panel)", "border": "1px solid var(--border)",
-              "borderRadius": "6px", "padding": "10px 14px", "fontSize": "12px",
-              "color": "var(--muted)", "minWidth": "200px"}
+def base_layout(theme: str = "dark", **overrides) -> dict:
+    """Plotly layout settings for a theme."""
+    t = palette(theme)
+    layout = dict(
+        paper_bgcolor=t["panel"], plot_bgcolor=t["bg"],
+        font=dict(color=t["text"], family=FONT),
+        colorway=series_colors(theme),
+        margin=dict(l=60, r=20, t=50, b=50),
+    )
+    layout.update(overrides)
+    return layout
 
 
-def upload_dropzone(component_id: str, label: str, accepted: str, compact: bool = False,
-                    accent: str = "var(--accent)") -> dcc.Upload:
-    """File drop zone. ``compact`` selects the narrower style of the dataset panels."""
-    caption = html.Div(f"Accepted: {accepted}",
-                       style={"color": "var(--muted)", "fontSize": "9px", "marginTop": "2px"})
-    if compact:
-        return dcc.Upload(
-            id=component_id, multiple=False,
-            children=html.Div([html.Div(label, style={"color": "var(--muted)", "fontSize": "11px"}),
-                               caption], style={"padding": "10px 0", "textAlign": "center"}),
-            style={"border": "1px dashed var(--border)", "borderRadius": "6px",
-                   "backgroundColor": "var(--bg)", "cursor": "pointer", "marginTop": "6px"})
-    return dcc.Upload(
-        id=component_id, multiple=False,
-        children=html.Div([html.Div("↑", style={"fontSize": "22px", "color": accent}),
-                           html.Div(label), caption],
-                          style={"textAlign": "center", "color": "var(--text)", "fontSize": "12px"}),
-        style={"border": "2px dashed var(--border)", "borderRadius": "8px", "padding": "12px",
-               "cursor": "pointer", "marginBottom": "6px"})
+def _style_axes(fig: go.Figure, theme: str) -> go.Figure:
+    """Apply the theme's grid and axis-line colors to every axis of a figure."""
+    t = palette(theme)
+    fig.update_xaxes(gridcolor=t["border"], zerolinecolor=t["border"], linecolor=t["border"])
+    fig.update_yaxes(gridcolor=t["border"], zerolinecolor=t["border"], linecolor=t["border"])
+    return fig
 
 
-def section_label(text: str, info: str | None = None, component_id: str | None = None,
-                  **style) -> html.Component:
-    """Sidebar section label, optionally with an information button (ⓘ).
+def empty_figure(message: str = "Upload a file to begin", theme: str = "dark",
+                 color: str | None = None) -> go.Figure:
+    """Blank figure displaying a message."""
+    t = palette(theme)
+    fig = go.Figure()
+    fig.update_layout(**base_layout(theme), xaxis=dict(visible=False), yaxis=dict(visible=False),
+                      annotations=[dict(text=message, xref="paper", yref="paper", x=0.5, y=0.5,
+                                        showarrow=False, font=dict(color=color or t["muted"], size=14))])
+    return fig
 
-    With ``info``, the label is the summary of an HTML ``<details>`` element:
-    clicking it reveals the explanation below, and hovering over it shows the
-    same text as a tooltip.
+
+def hole_labels(df: pd.DataFrame) -> pd.Series | None:
+    """Site+Hole label per row when a table spans several Holes, else ``None``."""
+    keys = hole_key_columns(df)
+    if not keys.complete:
+        return None
+    labels = df[keys.site].astype(str).str.strip() + df[keys.hole].astype(str).str.strip()
+    return labels if labels.nunique() > 1 else None
+
+
+def _segments(df: pd.DataFrame, labels: pd.Series | None):
+    """Yield ``(hole_label, sub_table)`` pairs; one pair if holes are not distinguished."""
+    if labels is None:
+        yield "", df
+        return
+    for label in pd.unique(labels):
+        yield str(label), df[labels == label]
+
+
+# ---------------------------------------------------------------------------
+# Shipboard view
+# ---------------------------------------------------------------------------
+
+def scatter_figure(df, x, y, color, theme="dark", invert_y=False) -> go.Figure:
+    """Scatter plot of two columns, optionally colored by a third."""
+    color = None if color in (None, "", "None") else color
+    fig = px.scatter(df, x=x, y=y, color=color, opacity=0.75)
+    fig.update_traces(marker=dict(size=5))
+    fig.update_layout(**base_layout(theme))
+    if invert_y:
+        fig.update_yaxes(autorange="reversed")
+    return _style_axes(fig, theme)
+
+
+def line_figure(df, x, y, theme="dark", invert_y=False) -> go.Figure:
+    """Line plot of y against x, sorted by x, with one line per Hole."""
+    labels = hole_labels(df)
+    fig = go.Figure()
+    for hole, part in _segments(df, labels):
+        part = part[[x, y]].dropna().sort_values(x)
+        fig.add_trace(go.Scatter(x=part[x], y=part[y], mode="lines", name=hole or y,
+                                 showlegend=bool(hole)))
+    fig.update_layout(**base_layout(theme), xaxis_title=x, yaxis_title=y)
+    if invert_y:
+        fig.update_yaxes(autorange="reversed")
+    return _style_axes(fig, theme)
+
+
+def histogram_figure(df, x, theme="dark", bins=40) -> go.Figure:
+    """Histogram of one column with a fixed number of bins."""
+    fig = px.histogram(df, x=x, nbins=bins, color_discrete_sequence=[palette(theme)["accent"]])
+    fig.update_layout(**base_layout(theme), yaxis_title="count")
+    return _style_axes(fig, theme)
+
+
+def heatmap_figure(df, theme="dark", min_pairs=10) -> go.Figure:
+    """Pearson correlation matrix of the measurement columns.
+
+    Depth and identifier columns (Core, Section, offsets, sample IDs) are
+    excluded. Each coefficient uses the rows complete for that pair; pairs
+    with fewer than ``min_pairs`` complete rows are left blank. The matrix is
+    descriptive: coefficients are not tested for significance.
     """
-    label_style = {**LABEL, **style}
-    if info is None:
-        return html.P(text, id=component_id, style=label_style) if component_id else html.P(text, style=label_style)
-    summary = html.Summary(
-        [html.Span(text, id=component_id) if component_id else html.Span(text),
-         html.Span("ⓘ", className="info-icon")],
-        className="info-summary", title=info,
-        style={**label_style, "display": "flex", "justifyContent": "space-between",
-               "alignItems": "center", "cursor": "pointer"})
-    return html.Details([
-        summary,
-        html.Div(info, style={**HINT, "background": "var(--bg)", "border": "1px solid var(--border)",
-                              "borderRadius": "4px", "padding": "6px 8px", "marginTop": "4px"}),
-    ])
+    columns = measurement_columns(df)[:MAX_HEATMAP_COLUMNS]
+    if len(columns) < 2:
+        return empty_figure("At least two measurement columns are required for a correlation matrix",
+                            theme)
+    corr = correlation_matrix(df, columns, min_pairs=min_pairs).round(2)
+    fig = px.imshow(corr, text_auto=True, aspect="auto", color_continuous_scale="RdBu_r",
+                    zmin=-1, zmax=1)
+    title = f"Pearson r (pairwise complete, n ≥ {min_pairs}; not tested for significance)"
+    fig.update_layout(**base_layout(theme), height=480, title=dict(text=title, font=dict(size=11)))
+    return fig
+
+
+def _axis_refs(column: int) -> tuple[str, str]:
+    """Plotly axis identifiers (``"x2"``, ``"y2"``) of a subplot column."""
+    suffix = str(column) if column > 1 else ""
+    return f"x{suffix}", f"y{suffix}"
+
+
+def _lithology_track(lithology: pd.DataFrame, column: int) -> tuple[list[dict], list[dict]]:
+    """Shapes and labels of the lithology track in a subplot column."""
+    x_axis, y_axis = _axis_refs(column)
+    shapes, labels = [], []
+    for row in lithology.itertuples(index=False):
+        shapes.append(dict(type="rect", xref=f"{x_axis} domain", yref=y_axis, x0=0, x1=1,
+                           y0=row.top_depth, y1=row.bottom_depth, line_width=0, opacity=0.8,
+                           fillcolor=lithology_color(row.lithology)))
+        labels.append(dict(xref=f"{x_axis} domain", yref=y_axis, x=0.5,
+                           y=(row.top_depth + row.bottom_depth) / 2, text=str(row.lithology)[:6],
+                           showarrow=False, textangle=-90, font=dict(size=7, color="#ffffff")))
+    return shapes, labels
+
+
+def depth_log_figure(df, depth, curves, lithology=None, lithology_scale=None,
+                     show_gaps=True, show_flags=True, show_core_tops=True,
+                     gap_threshold_m=5.0, theme="dark") -> go.Figure:
+    """Multi-track depth log with optional lithology and overlays.
+
+    Parameters
+    ----------
+    df
+        Data table.
+    depth
+        Depth column (shared vertical axis).
+    curves
+        Columns drawn as separate tracks.
+    lithology
+        Optional interval table with ``top_depth``, ``bottom_depth``,
+        ``lithology``.
+    lithology_scale
+        Depth scale of the lithology table. A mismatch with the data depth
+        scale is reported in the figure title.
+    show_gaps
+        Shade sampling gaps wider than ``gap_threshold_m`` (per Hole).
+    show_flags
+        Mark samples with a non-empty comment field.
+    show_core_tops
+        Mark the shallowest sampled depth of each core.
+    """
+    t = palette(theme)
+    curves = [c for c in curves if c in df.columns]
+    if not curves:
+        return empty_figure("Select one or more curves", theme)
+    has_lithology = lithology is not None and len(lithology) > 0
+    titles = (["Lithology"] if has_lithology else []) + curves
+    widths = [0.07 if name == "Lithology" else 1.0 for name in titles]
+    fig = make_subplots(rows=1, cols=len(titles), shared_yaxes=True, subplot_titles=titles,
+                        column_widths=[w / sum(widths) for w in widths], horizontal_spacing=0.012)
+    # Shapes and annotations are collected and assigned in one layout update;
+    # adding them one at a time is quadratic in their number.
+    shapes: list[dict] = []
+    annotations: list[dict] = list(fig.layout.annotations)
+    first = 1
+    if has_lithology:
+        litho_shapes, litho_labels = _lithology_track(lithology, 1)
+        shapes += litho_shapes
+        annotations += litho_labels
+        # Invisible trace so the shared depth axis spans the lithology intervals.
+        fig.add_trace(go.Scatter(x=[0.5, 0.5],
+                                 y=[lithology["top_depth"].min(), lithology["bottom_depth"].max()],
+                                 mode="markers", marker_opacity=0, showlegend=False, hoverinfo="skip"),
+                      row=1, col=1)
+        fig.update_xaxes(showticklabels=False, showgrid=False, row=1, col=1)
+        first = 2
+
+    colors = series_colors(theme)
+    labels = hole_labels(df)
+    gaps = find_sampling_gaps(df, depth, gap_threshold_m) if show_gaps else []
+    flagged = comment_flagged(df) if show_flags else pd.Series(False, index=df.index)
+    tops = core_tops(df, depth) if show_core_tops else []
+
+    for i, curve in enumerate(curves):
+        column = first + i
+        x_axis, y_axis = _axis_refs(column)
+        color = colors[i % len(colors)]
+        for j, (hole, part) in enumerate(_segments(df, labels)):
+            part = part[[depth, curve]].dropna().sort_values(depth)
+            fig.add_trace(go.Scatter(
+                x=part[curve], y=part[depth], mode="lines", name=curve, legendgroup=curve,
+                showlegend=(j == 0), line=dict(color=color, width=1.4),
+                hovertemplate=(f"{hole} " if hole else "") + "%{x:.4g} at %{y:.2f}<extra>" + curve + "</extra>",
+            ), row=1, col=column)
+        for hole, top, bottom in gaps:
+            shapes.append(dict(type="rect", xref=f"{x_axis} domain", yref=y_axis, x0=0, x1=1,
+                               y0=top, y1=bottom, fillcolor="#888780", opacity=0.15, line_width=0,
+                               layer="below"))
+            if i == 0:
+                annotations.append(dict(xref=f"{x_axis} domain", yref=y_axis, x=0, y=top,
+                                        text=f"gap {hole}".strip(), showarrow=False, xanchor="left",
+                                        yanchor="top", font=dict(size=8, color=t["muted"])))
+        marked = df.loc[flagged & df[curve].notna() & df[depth].notna(), [depth, curve]]
+        if len(marked):
+            fig.add_trace(go.Scatter(
+                x=marked[curve], y=marked[depth], mode="markers", name="Comment on sample",
+                legendgroup="comment_flags", showlegend=(i == 0),
+                marker=dict(symbol="circle-open", size=8, color=t["danger"], line_width=1.5),
+                hovertemplate="%{y:.2f}: sample has a comment<extra></extra>"), row=1, col=column)
+        if i == 0 and tops:
+            values = df[curve].dropna()
+            if len(values):
+                x0 = float(values.min())
+                x1 = x0 + 0.12 * ((float(values.max()) - x0) or 1.0)
+                for label, top in tops:
+                    shapes.append(dict(type="line", xref=x_axis, yref=y_axis, x0=x0, x1=x1, y0=top, y1=top,
+                                       line=dict(color=t["warn"], width=0.8, dash="dot")))
+                    annotations.append(dict(xref=x_axis, yref=y_axis, x=x1, y=top, text=label,
+                                            showarrow=False, xanchor="left",
+                                            font=dict(size=7, color=t["warn"])))
+    fig.update_layout(shapes=shapes, annotations=annotations)
+
+    title = None
+    if has_lithology and lithology_scale:
+        data_scale = depth_scale(depth)
+        if data_scale and canonical_scale(data_scale) != canonical_scale(lithology_scale):
+            title = (f"Warning: lithology depths are on {lithology_scale}, "
+                     f"data depths are on {data_scale}")
+    fig.update_yaxes(autorange="reversed", title_text=depth, row=1, col=1)
+    fig.update_layout(**base_layout(theme), height=580, showlegend=True,
+                      legend=dict(x=1.01, y=1, font=dict(size=10)),
+                      title=dict(text=title, font=dict(size=11, color=t["warn"])) if title else None)
+    return _style_axes(fig, theme)
 
 
 # ---------------------------------------------------------------------------
-# Shipboard tab
+# Legacy Data view
 # ---------------------------------------------------------------------------
 
-def _metadata_inputs():
-    """Text inputs for the optional site metadata shown in the banner."""
-    fields = [
-        ("EXPEDITION", "meta-expedition", "e.g. 405"),
-        ("SITE / HOLE", "meta-site-hole", "e.g. C0019J"),
-        ("LATITUDE", "meta-lat", "decimal degrees, e.g. 37.95"),
-        ("LONGITUDE", "meta-lon", "decimal degrees, e.g. 143.91"),
-        ("WATER DEPTH (m)", "meta-water-depth", "e.g. 6897"),
-        ("CORE RECOVERY (%)", "meta-recovery", "e.g. 68.4"),
-    ]
-    return [html.Div([html.Div(label, style={**LABEL, "marginTop": "6px"}),
-                      dcc.Input(id=fid, type="text", placeholder=ph, debounce=True, style=INPUT)])
-            for label, fid, ph in fields]
+def _track_colors(theme, columns_a, columns_b):
+    """Pair each selected column with a color: blue-violet hues for dataset A,
+    warm hues for dataset B."""
+    t = palette(theme)
+    colors_a = [t["accent"], "#bc8cff", "#ff7b72"]
+    colors_b = [t["accent3"], t["accent2"], "#f0883e"]
+    return ([(c, colors_a[i % len(colors_a)]) for i, c in enumerate(columns_a)]
+            + [(c, colors_b[i % len(colors_b)]) for i, c in enumerate(columns_b)])
 
 
-def shipboard_sidebar() -> html.Div:
-    """Controls of the Shipboard tab: file uploads, site metadata, chart type, and chart options."""
-    return html.Div([
-        html.P("DATA FILE", style=LABEL),
-        upload_dropzone("upload", "Drop file or click to upload", ACCEPTED_DATA),
-        html.Div(id="upload-status", style={"fontSize": "10px", "marginBottom": "6px"}),
-
-        section_label("LITHOLOGY TRACK (optional)",
-                      "A separate table of intervals with top depth, bottom depth, and lithology "
-                      "columns. It is drawn as a colored track beside the depth log and does not "
-                      "replace the data file. Its depths must be on the same scale as the data."),
-        upload_dropzone("upload-litho", "Drop lithology file or click", ACCEPTED_LITHOLOGY,
-                        accent="var(--accent3)"),
-        html.Div(id="litho-badge"),
-
-        html.Hr(style=DIVIDER),
-        section_label("SITE METADATA (optional)",
-                      "Detected from the file where possible. Entries here override detected values "
-                      "in the banner only; they are not written to exports."),
-        *_metadata_inputs(),
-
-        html.Hr(style=DIVIDER),
-        html.P("CHART TYPE", style=LABEL),
-        dcc.RadioItems(id="chart-type", value="depthlog", labelStyle=CHECK_LABEL, inputStyle=CHECK_INPUT,
-                       options=[{"label": " Depth log", "value": "depthlog"},
-                                {"label": " Scatter", "value": "scatter"},
-                                {"label": " Line", "value": "line"},
-                                {"label": " Histogram", "value": "histogram"},
-                                {"label": " Correlation matrix", "value": "heatmap"}]),
-
-        html.P("DEPTH COLUMN", id="depth-lbl", style=LABEL),
-        dcc.Dropdown(id="depth-col", placeholder="Select depth column...", style=DROPDOWN),
-        html.P("X AXIS", id="x-lbl", style=LABEL),
-        dcc.Dropdown(id="x-col", placeholder="Select column...", style=DROPDOWN),
-        html.P("Y AXIS", id="y-lbl", style=LABEL),
-        dcc.Dropdown(id="y-col", placeholder="Select column...", style=DROPDOWN),
-        html.P("COLOR BY", id="color-lbl", style=LABEL),
-        dcc.Dropdown(id="color-col", placeholder="None", style=DROPDOWN),
-        html.P("CURVES", id="curves-lbl", style=LABEL),
-        dcc.Checklist(id="depth-curves", options=[], value=[], labelStyle=CHECK_LABEL,
-                      inputStyle=CHECK_INPUT),
-
-        html.Div(id="depthlog-options", children=[
-            html.Hr(style=DIVIDER),
-            section_label("DEPTH LOG OVERLAYS",
-                          "Sampling gap: an interval wider than the threshold between consecutive "
-                          "samples of the same hole; it marks missing measurements, not core recovery. "
-                          "Samples with comments: rows whose comment field is not empty; comments record "
-                          "any analyst note and do not necessarily indicate a bad measurement. Core top: "
-                          "the shallowest sampled depth in each core."),
-            dcc.Checklist(id="overlay-opts", value=["gaps", "flags", "core_tops"],
-                          labelStyle=CHECK_LABEL, inputStyle=CHECK_INPUT,
-                          options=[{"label": " Sampling gaps", "value": "gaps"},
-                                   {"label": " Samples with comments", "value": "flags"},
-                                   {"label": " Core tops (shallowest sample)", "value": "core_tops"}]),
-            html.Div("Gap threshold (m)", style={**LABEL, "marginTop": "4px"}),
-            dcc.Input(id="gap-threshold", type="number", value=5.0, min=0.01, step="any", style=INPUT),
-        ]),
-
-        html.Div(id="axis-options", children=[
-            html.Hr(style=DIVIDER),
-            html.P("AXIS OPTIONS", style=LABEL),
-            dcc.Checklist(id="axis-opts", value=["invert_y"], labelStyle=CHECK_LABEL,
-                          inputStyle=CHECK_INPUT,
-                          options=[{"label": " Reverse Y axis (depth increasing downward)",
-                                    "value": "invert_y"}]),
-        ]),
-    ], style={"width": "250px", "minWidth": "250px", "background": "var(--panel)",
-              "borderRight": "1px solid var(--border)", "padding": "18px"})
+def tracks_figure(df, depth, columns_a, columns_b, theme="dark") -> go.Figure:
+    """One depth track per selected column, sharing a depth axis."""
+    items = _track_colors(theme, columns_a, columns_b)
+    fig = make_subplots(rows=1, cols=len(items), shared_yaxes=True, horizontal_spacing=0.03)
+    labels = hole_labels(df)
+    for i, (column, color) in enumerate(items):
+        for hole, part in _segments(df, labels):
+            part = part[[depth, column]].dropna().sort_values(depth)
+            fig.add_trace(go.Scatter(x=part[column], y=part[depth], mode="lines", name=column,
+                                     line=dict(color=color, width=1.4),
+                                     hovertemplate=(f"{hole} " if hole else "")
+                                     + "%{x:.4g} at %{y:.2f}<extra>" + column + "</extra>"),
+                          row=1, col=i + 1)
+        fig.update_xaxes(title_text=column, title_font=dict(size=10), row=1, col=i + 1)
+    fig.update_yaxes(title_text=depth, autorange="reversed", row=1, col=1)
+    fig.update_layout(**base_layout(theme), height=600, showlegend=False)
+    return _style_axes(fig, theme)
 
 
-def shipboard_tab() -> html.Div:
-    """Shipboard tab: metadata banner, sidebar, summary cards, chart, and data table."""
-    return html.Div([
-        html.Div(id="meta-banner"),
-        html.Div([
-            shipboard_sidebar(),
-            html.Div([
-                html.Div(id="kpi-bar", style={"display": "flex", "gap": "10px", "padding": "10px 18px",
-                                              "borderBottom": "1px solid var(--border)",
-                                              "flexWrap": "wrap"}),
-                html.Div(dcc.Graph(id="main-chart", config={"displayModeBar": True, "scrollZoom": True}),
-                         style={"padding": "10px 18px"}),
-                html.Div([
-                    html.Div([
-                        html.Span("DATA TABLE", style={"color": "var(--muted)", "fontSize": "10px",
-                                                       "letterSpacing": "2px"}),
-                        html.Span(id="row-count", style={"color": "var(--accent)", "fontSize": "11px",
-                                                         "marginLeft": "12px"}),
-                    ], style={"marginBottom": "8px"}),
-                    html.Div(id="table-container"),
-                ], style={**CARD, "margin": "0 18px 18px 18px"}),
-            ], style={"flex": "1", "minWidth": "320px"}),
-        ], style={"display": "flex", "flexWrap": "wrap", "flex": "1"}),
-    ], style={"display": "flex", "flexDirection": "column", "flex": "1"})
+def correlation_figure(df, depth, column_x, column_y, theme="dark", detrend=False) -> go.Figure:
+    """Cross-plot of two columns colored by depth, with OLS fit and statistics.
+
+    Statistics are computed by :func:`sod_explorer.analysis.correlate`,
+    which adjusts the significance test for serial correlation. With
+    ``detrend``, the linear depth trend of each column is removed (within
+    each Hole) and the residuals are plotted and correlated.
+    """
+    t = palette(theme)
+    sub = df[[depth, column_x, column_y]].copy()
+    labels = hole_labels(df)
+    groups = labels if labels is not None else pd.Series("", index=df.index)
+    sub["_hole"] = groups.values
+    sub = sub.dropna(subset=[depth, column_x, column_y])
+    if len(sub) < 3:
+        return empty_figure("Fewer than three depth-matched pairs; nothing to correlate", theme)
+    x_label, y_label = column_x, column_y
+    if detrend:
+        sub[column_x] = detrend_by_depth(sub[column_x], sub[depth], sub["_hole"])
+        sub[column_y] = detrend_by_depth(sub[column_y], sub[depth], sub["_hole"])
+        sub = sub.dropna(subset=[column_x, column_y])
+        x_label, y_label = f"{column_x}, residual from depth trend", f"{column_y}, residual from depth trend"
+        if len(sub) < 3:
+            return empty_figure("Too few samples per hole to remove a depth trend", theme)
+    fig = go.Figure(go.Scatter(
+        x=sub[column_x], y=sub[column_y], mode="markers", name="samples",
+        marker=dict(color=sub[depth], colorscale="Viridis_r", size=5, opacity=0.75, showscale=True,
+                    colorbar=dict(title=dict(text=depth, font=dict(color=t["muted"], size=10)),
+                                  tickfont=dict(color=t["muted"]))),
+        hovertemplate=(f"{x_label}: %{{x:.4g}}<br>{y_label}: %{{y:.4g}}"
+                       "<br>depth: %{marker.color:.2f}<extra></extra>"),
+    ))
+    try:
+        # Values are already detrended above, so correlate() is not asked to detrend again.
+        result = correlate(sub[column_x], sub[column_y], sub[depth],
+                           groups=sub["_hole"] if labels is not None else None)
+        result.detrended = detrend
+    except ValueError as exc:
+        fig.update_layout(title=dict(text=str(exc), font=dict(size=11)))
+    else:
+        x_range = np.linspace(sub[column_x].min(), sub[column_x].max(), 200)
+        fig.add_trace(go.Scatter(x=x_range, y=result.slope * x_range + result.intercept, mode="lines",
+                                 name="OLS fit", line=dict(color=t["danger"], width=1.5, dash="dash")))
+        # The statistics are set on two lines so that they fit the width of a phone screen.
+        summary = result.summary().replace(", p = ", "<br>p = ").replace(" (significance", "<br>(significance")
+        fig.update_layout(title=dict(text=summary
+                                     + "<br><sup>p and CI use n_eff adjusted for lag-1 autocorrelation<br>"
+                                       "(Bretherton et al., 1999)</sup>", font=dict(size=11)))
+    fig.update_layout(**base_layout(theme), height=600, xaxis_title=x_label, yaxis_title=y_label,
+                      showlegend=True, legend=dict(orientation="h", y=-0.15))
+    fig.update_layout(margin=dict(t=96), title=dict(y=0.98, yanchor="top"))
+    return _style_axes(fig, theme)
 
 
-# ---------------------------------------------------------------------------
-# Legacy Data tab
-# ---------------------------------------------------------------------------
-
-_SOURCE_NOTE = (
-    "Select a Leg or Expedition; the archive is chosen automatically. DSDP Legs are retrieved "
-    "from the DSDP Data Access application (or PANGAEA for a few data types); JOIDES Resolution "
-    "expeditions from LORE (LIMS data, Expedition 317 onward); Chikyu and Mission-Specific "
-    "Platform expeditions from PANGAEA. ODP Legs are retrieved from the NOAA NCEI archive, one "
-    "Hole at a time; IODP Expeditions 301 to 312 may require file upload. Report types use one "
-    "generic name across programs; a "
-    "type with no DSDP equivalent returns no DSDP data."
-)
-
-
-def _report_options() -> list[dict]:
-    """Report-type options with the category headings styled as small labels."""
-    heading = {"color": "var(--accent)", "fontSize": "10px", "letterSpacing": "2px", "fontWeight": "700"}
-    return [{**o, "label": html.Span(o["label"], style=heading), "search": o["label"]}
-            if o.get("disabled") else o for o in menu_options()]
+def dual_axis_figure(df, depth, column_a, column_b, theme="dark") -> go.Figure:
+    """Two columns against depth (horizontal) on independent vertical axes."""
+    t = palette(theme)
+    labels = hole_labels(df)
+    fig = go.Figure()
+    for column, color, axis, dash in ((column_a, t["accent"], "y", "solid"),
+                                      (column_b, t["accent3"], "y2", "dot")):
+        for j, (_hole, part) in enumerate(_segments(df, labels)):
+            part = part[[depth, column]].dropna().sort_values(depth)
+            fig.add_trace(go.Scatter(x=part[depth], y=part[column], mode="lines", name=column,
+                                     legendgroup=column, showlegend=(j == 0), yaxis=axis,
+                                     line=dict(color=color, width=1.4, dash=dash)))
+    fig.update_layout(**base_layout(theme), height=600,
+                      xaxis=dict(title=depth), yaxis=dict(title=column_a, color=t["accent"]),
+                      yaxis2=dict(title=column_b, color=t["accent3"], overlaying="y", side="right",
+                                  showgrid=False),
+                      legend=dict(bgcolor=t["panel"], bordercolor=t["border"], borderwidth=1))
+    return _style_axes(fig, theme)
 
 
-def dataset_panel(ds: str) -> html.Div:
-    """Retrieval controls for dataset ``"a"`` or ``"b"``."""
-    accent = "var(--accent)" if ds == "a" else "var(--accent3)"
-    return html.Div([
-        section_label(f"DATASET {ds.upper()}", _SOURCE_NOTE, component_id=f"pe-{ds}-label",
-                      color=accent, marginTop="0"),
-        dcc.RadioItems(id=f"pe-{ds}-source", value="database",
-                       options=[{"label": " Public archive", "value": "database"},
-                                {"label": " Local file upload", "value": "upload"}],
-                       labelStyle={"display": "block", "color": "var(--muted)", "fontSize": "11px",
-                                   "marginBottom": "3px"},
-                       inputStyle={"marginRight": "6px", "accentColor": accent}),
-        html.Div(id=f"pe-{ds}-upload-panel", style={"display": "none"}, children=[
-            upload_dropzone(f"pe-{ds}-upload", "Drop file or click to upload", ACCEPTED_DATA, compact=True),
-            html.Div(id=f"pe-{ds}-upload-status", style={"fontSize": "10px", "marginTop": "4px"}),
-        ]),
-        html.Div(id=f"pe-{ds}-database-panel", children=[
-            dcc.Dropdown(id=f"pe-{ds}-exp", options=[{"label": e, "value": e} for e in ALL_EXPEDITIONS],
-                         placeholder="Leg / Expedition", style=DROPDOWN),
-            dcc.Dropdown(id=f"pe-{ds}-site", placeholder="Site (optional; all if blank)",
-                         style={**DROPDOWN, "marginTop": "4px"}),
-            dcc.Dropdown(id=f"pe-{ds}-hole", placeholder="Hole (optional; all if blank)",
-                         style={**DROPDOWN, "marginTop": "4px"}),
-            html.P("REPORT TYPE", style={**LABEL, "marginTop": "10px"}),
-            dcc.Dropdown(id=f"pe-{ds}-report", placeholder="Select report...", style=DROPDOWN,
-                         options=_report_options()),
-            html.Button(f"Fetch {ds.upper()}", id=f"pe-{ds}-fetch", n_clicks=0, style=button(accent)),
-            dcc.Loading(html.Div(id=f"pe-{ds}-db-status", style={"fontSize": "10px", "marginTop": "4px"}),
-                        type="dot", color="var(--accent)"),
-            html.Div(id=f"pe-{ds}-db-results", style={"marginTop": "6px"}),
-        ]),
-    ], style={"borderBottom": "1px solid var(--border)", "paddingBottom": "12px", "marginBottom": "12px"})
+def smoothed_figure(df, depth, columns_a, columns_b, window_m, min_count=3, theme="dark") -> go.Figure:
+    """Raw and depth-window-averaged tracks.
 
-
-_VIEW_NOTE = (
-    "Single dataset: load one dataset from an archive or a file and plot it. Merge two datasets: "
-    "load datasets A and B, pair their samples by depth, and compare them."
-)
-_MERGE_NOTE = (
-    "Each sample of A is paired with the nearest sample of B in the same hole (the same site when "
-    "both depth columns are on a composite scale) within the tolerance. Choose the depth column of "
-    "each dataset above the chart before merging."
-)
-_CHART_NOTE = (
-    "The cross-plot and dual-axis overlay compare two columns: the first two selected columns in "
-    "single-dataset view, or the first column of A and of B in merged view."
-)
-_DETREND_NOTE = (
-    "Properties that both change with depth (for example, through compaction) correlate through "
-    "the shared trend. Removing each trend, per hole, tests whether the deviations co-vary."
-)
-_WINDOW_NOTE = (
-    "Centered mean over a fixed depth interval, computed separately for each hole. Windows with "
-    "fewer than three samples are left blank."
-)
-
-
-def legacy_sidebar() -> html.Div:
-    """Controls of the Legacy Data tab: view, dataset panels, merge settings, and chart mode."""
-    return html.Div([
-        section_label("VIEW", _VIEW_NOTE, marginTop="0"),
-        dcc.RadioItems(id="pe-view-mode", value="a", labelStyle=CHECK_LABEL, inputStyle=CHECK_INPUT,
-                       options=[{"label": " Single dataset", "value": "a"},
-                                {"label": " Merge two datasets", "value": "merged"}]),
-        html.Hr(style={**DIVIDER, "margin": "10px 0"}),
-        dataset_panel("a"),
-        html.Div(id="pe-merge-section", style={"display": "none"}, children=[
-            dataset_panel("b"),
-            section_label("DEPTH MERGE", _MERGE_NOTE, marginTop="0"),
-            html.Div("Tolerance (cm)", style={**LABEL, "marginTop": "4px"}),
-            dcc.Input(id="pe-tolerance", value=2, type="number", min=0, max=500, step="any", style=INPUT),
-            dcc.Checklist(id="pe-merge-opts", value=["one_to_one"],
-                          labelStyle={**CHECK_LABEL, "marginTop": "8px"}, inputStyle=CHECK_INPUT,
-                          options=[{"label": " Use each B sample at most once", "value": "one_to_one"},
-                                   {"label": " Allow different depth scales", "value": "mixed_scales"},
-                                   {"label": " Pair across different Sites/Holes (depth only)",
-                                    "value": "across_holes"}]),
-            html.Button("Merge datasets", id="pe-merge-btn", n_clicks=0,
-                        style={**button("var(--accent2)"), "fontSize": "12px"}),
-        ]),
-
-        html.Hr(style={**DIVIDER, "margin": "10px 0"}),
-        section_label("CHART", _CHART_NOTE),
-        dcc.RadioItems(id="pe-chart-mode", value="tracks", labelStyle=CHECK_LABEL, inputStyle=CHECK_INPUT,
-                       options=[{"label": " Depth tracks", "value": "tracks"},
-                                {"label": " Cross-plot with correlation", "value": "scatter"},
-                                {"label": " Dual-axis overlay", "value": "dual"},
-                                {"label": " Depth-window mean", "value": "rolling"}]),
-        html.Div(id="pe-detrend-ctrl", style={"display": "none"}, children=[
-            section_label("TREND", _DETREND_NOTE, marginTop="8px"),
-            dcc.Checklist(id="pe-detrend", value=[], labelStyle=CHECK_LABEL, inputStyle=CHECK_INPUT,
-                          options=[{"label": " Remove linear depth trend first", "value": "detrend"}]),
-        ]),
-        html.Div(id="pe-rolling-ctrl", style={"display": "none"}, children=[
-            section_label("WINDOW (m)", _WINDOW_NOTE, marginTop="8px"),
-            dcc.Input(id="pe-rolling-window", value=3, type="number", min=0.01, step="any", style=INPUT),
-        ]),
-    ], style={"width": "270px", "minWidth": "270px", "background": "var(--panel)",
-              "borderRight": "1px solid var(--border)", "padding": "18px"})
-
-
-def legacy_tab() -> html.Div:
-    """Legacy Data tab: sidebar, dataset status, Expedition filter, column pickers, chart, and table."""
-    return html.Div([
-        legacy_sidebar(),
-        html.Div([
-            html.Div([html.Div(id="pe-status-a", style={**STATUS_BOX, "marginRight": "8px"}),
-                      html.Div(id="pe-status-b", style={**STATUS_BOX, "marginRight": "8px", "display": "none"}),
-                      html.Div(id="pe-status-merged", style={**STATUS_BOX, "display": "none"})],
-                     style={"display": "flex", "flexWrap": "wrap", "gap": "4px", "marginBottom": "12px"}),
-            html.Div([
-                html.Div([
-                    html.Span("EXPEDITIONS SHOWN", style={"color": "var(--text)", "fontSize": "11px",
-                                                         "letterSpacing": "1px", "fontWeight": "600"}),
-                    html.Button("All / None", id="pe-exp-all-none", n_clicks=0,
-                                style={"backgroundColor": "var(--border)", "color": "var(--text)",
-                                       "border": "none", "borderRadius": "4px", "padding": "3px 10px",
-                                       "cursor": "pointer", "fontSize": "10px", "marginLeft": "12px"}),
-                    html.Button("Download data + provenance (ZIP)", id="pe-download-btn", n_clicks=0,
-                                style={"backgroundColor": "var(--panel)", "color": "var(--accent)",
-                                       "border": "1px solid var(--border)", "borderRadius": "4px",
-                                       "padding": "3px 12px", "cursor": "pointer", "fontSize": "10px",
-                                       "marginLeft": "auto"}),
-                    dcc.Download(id="pe-download"),
-                ], style={"display": "flex", "alignItems": "center", "marginBottom": "8px"}),
-                dcc.Checklist(id="pe-exp-filter", options=[], value=[],
-                              labelStyle={"display": "inline-block", "margin": "3px 8px 3px 0",
-                                          "color": "var(--muted)", "fontSize": "11px"}),
-                html.Div(id="pe-exp-hint", style={**HINT, "fontStyle": "italic"}),
-            ], style={**CARD, "marginBottom": "12px"}),
-            html.Div([
-                html.Div([html.P("MERGE DEPTH, A", style=CONTROL_LABEL),
-                          dcc.Dropdown(id="pe-depth-a", options=[], placeholder="auto-detect",
-                                       style=DROPDOWN)], id="pe-depth-a-container",
-                         style={**CONTROL_ITEM, "display": "none"}),
-                html.Div([html.P("MERGE DEPTH, B", style=CONTROL_LABEL),
-                          dcc.Dropdown(id="pe-depth-b", options=[], placeholder="auto-detect",
-                                       style=DROPDOWN)], id="pe-depth-b-container",
-                         style={**CONTROL_ITEM, "display": "none"}),
-                html.Div([html.P("DEPTH AXIS", style=CONTROL_LABEL),
-                          dcc.Dropdown(id="pe-xaxis", options=[], style=DROPDOWN)], style=CONTROL_ITEM),
-                html.Div([html.P("COLUMNS", id="pe-yaxis-lbl", style=CONTROL_LABEL),
-                          dcc.Dropdown(id="pe-yaxis", options=[], multi=True, style=DROPDOWN)],
-                         style={**CONTROL_ITEM, "flex": "2 1 240px"}),
-                html.Div(id="pe-ycols-b-container", children=[
-                    html.P("DATASET B COLUMNS", style=CONTROL_LABEL),
-                    dcc.Dropdown(id="pe-ycols-b", options=[], multi=True, style=DROPDOWN)],
-                    style={"display": "none"}),
-            ], style={**CARD, "display": "flex", "flexWrap": "wrap", "gap": "12px",
-                      "alignItems": "flex-end", "marginBottom": "12px"}),
-            dcc.Graph(id="pe-chart", config={"displayModeBar": True, "scrollZoom": True}),
-            html.Div(id="pe-table-container", style={"marginTop": "16px"}),
-        ], style={"flex": "1", "padding": "16px", "minWidth": "320px"}),
-    ], style={"display": "flex", "flexWrap": "wrap", "flex": "1"})
-
-
-# ---------------------------------------------------------------------------
-# Page
-# ---------------------------------------------------------------------------
-
-def build_layout() -> html.Div:
-    """Complete page layout. Both tabs are rendered once and shown or hidden."""
-    header = html.Div([
-        html.Div([
-            html.Div([html.Span("SOD", style={"fontWeight": "700", "color": "var(--accent)"}),
-                      html.Span(" Explorer", style={"fontWeight": "300", "color": "var(--text)"}),
-                      html.Span(f"  v{__version__}", style={"color": "var(--muted)", "fontSize": "10px"})],
-                     style={"fontSize": "17px", "fontFamily": FONT}),
-            html.Div("Scientific Ocean Drilling · Data Visualization Tool",
-                     style={"color": "var(--muted)", "fontSize": "11px", "fontFamily": FONT}),
-        ]),
-        html.Button(id="theme-toggle", n_clicks=0, children="Light mode",
-                    style={"backgroundColor": "transparent", "border": "1px solid var(--border)",
-                           "borderRadius": "6px", "color": "var(--muted)", "cursor": "pointer",
-                           "fontSize": "11px", "fontFamily": FONT, "padding": "5px 12px"}),
-    ], style={"display": "flex", "justifyContent": "space-between", "alignItems": "center",
-              "padding": "8px 20px", "background": "var(--panel)", "borderBottom": "1px solid var(--border)"})
-
-    return html.Div([
-        header,
-        dcc.Tabs(id="main-tabs", value="legacy", style={"fontFamily": FONT}, children=[
-            dcc.Tab(label="Legacy Data", value="legacy", style=TAB_STYLE, selected_style=TAB_SELECTED),
-            dcc.Tab(label="Shipboard", value="shipboard", style=TAB_STYLE, selected_style=TAB_SELECTED),
-        ]),
-        html.Div(legacy_tab(), id="legacy-container"),
-        html.Div(shipboard_tab(), id="shipboard-container", style={"display": "none"}),
-
-        dcc.Store(id="theme-store", storage_type="local", data="dark"),
-        dcc.Store(id="store-df"), dcc.Store(id="store-meta"), dcc.Store(id="store-litho"),
-        dcc.Store(id="store-site-info"),
-        dcc.Store(id="pe-store-a"), dcc.Store(id="pe-store-b"), dcc.Store(id="pe-merged-store"),
-        dcc.Store(id="pe-prov-a"), dcc.Store(id="pe-prov-b"), dcc.Store(id="pe-prov-merged"),
-    ], style={"minHeight": "100vh", "display": "flex", "flexDirection": "column",
-              "background": "var(--bg)", "color": "var(--text)", "fontFamily": FONT})
+    Each column is smoothed with a centered mean over ``window_m`` of depth,
+    computed separately for each Hole (see
+    :func:`sod_explorer.analysis.depth_window_mean`). Windows with fewer
+    than ``min_count`` samples are left blank.
+    """
+    t = palette(theme)
+    items = _track_colors(theme, columns_a, columns_b)
+    labels = hole_labels(df)
+    fig = make_subplots(rows=1, cols=len(items), shared_yaxes=True, horizontal_spacing=0.03)
+    for i, (column, color) in enumerate(items):
+        for j, (_hole, part) in enumerate(_segments(df, labels)):
+            part = part[[depth, column]].dropna().sort_values(depth)
+            smooth = depth_window_mean(part[depth], part[column], window_m, min_count=min_count)
+            fig.add_trace(go.Scatter(x=part[column], y=part[depth], mode="lines", showlegend=False,
+                                     line=dict(color=color, width=0.6), opacity=0.35,
+                                     hoverinfo="skip"), row=1, col=i + 1)
+            fig.add_trace(go.Scatter(x=smooth, y=part[depth], mode="lines",
+                                     name=f"{column} ({window_m:g} m mean)", legendgroup=column,
+                                     showlegend=(j == 0), line=dict(color=color, width=2.2)),
+                          row=1, col=i + 1)
+        fig.update_xaxes(title_text=column, title_font=dict(size=10), row=1, col=i + 1)
+    fig.update_yaxes(title_text=depth, autorange="reversed", row=1, col=1)
+    fig.update_layout(**base_layout(theme), height=600, showlegend=True,
+                      legend=dict(bgcolor=t["panel"], bordercolor=t["border"], borderwidth=1,
+                                  font=dict(size=10)))
+    return _style_axes(fig, theme)
