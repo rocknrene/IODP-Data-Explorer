@@ -1,0 +1,14 @@
+{
+  "name": "SOD Explorer preview",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11",
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends chromium chromium-driver && pip install -r requirements.txt",
+  "postAttachCommand": "python app.py",
+  "containerEnv": {
+    "CHROME_BIN": "/usr/bin/chromium",
+    "CHROMEDRIVER_PATH": "/usr/bin/chromedriver"
+  },
+  "forwardPorts": [7860],
+  "portsAttributes": {
+    "7860": { "label": "SOD Explorer", "onAutoForward": "openBrowser" }
+  }
+}

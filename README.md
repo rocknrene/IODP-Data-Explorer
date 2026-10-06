@@ -1,5 +1,6 @@
 ---
 title: SOD Explorer
+emoji: 🌊
 colorFrom: blue
 colorTo: green
 sdk: docker
@@ -8,8 +9,10 @@ pinned: false
 license: mit
 short_description: Scientific ocean drilling data visualization tool
 ---
- 
- SOD Explorer
+
+# SOD Explorer
+
+[![DOI](https://zenodo.org/badge/1267426154.svg)](https://doi.org/10.5281/zenodo.20669063)
 
 SOD (Scientific Ocean Drilling) Explorer is a web application and Python
 package for retrieving,
@@ -18,8 +21,12 @@ Deep Sea Drilling Project (DSDP), the Ocean Drilling Program (ODP), and the
 International Ocean Discovery Program (IODP).
 
 Live application: <https://huggingface.co/spaces/rocknrene/IODP-Data-Explorer>
+Source code: <https://github.com/rocknrene/IODP-Data-Explorer>
 
-## Motivation
+The block at the top of this file configures the Hugging Face Space and must
+not be removed; without it the Space reports a configuration error.
+
+## Statement of need
 
 Sixty years of scientific ocean drilling data are distributed across
 several archives with different access methods, vocabularies, and depth
@@ -77,6 +84,52 @@ the *Scientific Ocean Drilling Legacy Data Access: Quick Start Guide*
 (Childress, 2026). The assignments are read from the reference table in
 `sod_explorer/data/` (see its README for contents and provenance). Retrieved tables are always re-filtered to the requested Leg,
 Site, and Hole, because the services do not filter reliably in every case.
+
+PANGAEA and J-CORES tables identify samples by a label
+("177-1090E-8H-3,130") instead of separate columns. Such labels are expanded
+into Expedition, Site, Hole, and Core columns when they parse and the Site
+exists in the reference table, so that these tables can be grouped by hole
+like any other. PANGAEA's "Depth sed" is treated as depth below seafloor
+(mbsf).
+
+## Report types
+
+Report types are offered under one generic name across the three programs,
+following the cross-program data-type table compiled by L. B. Childress
+(Gulf Coast Repository; "SOD Data Types", 2026). The table's sixteen types
+marked for inclusion are offered. Biostratigraphy, core description,
+operations, and X-ray data types are excluded, and paleomagnetism and
+major, minor, and trace elements are deferred pending a decision.
+
+| Category | Generic name | DSDP source | ODP report | IODP LIMS report |
+|---|---|---|---|---|
+| Downhole | Downhole temperature | none listed | Downhole temperature | APCT-3/SET |
+| Geochemistry | Carbonates | carbonate and carbon | Carbonates (CARB) | CARB |
+| Geochemistry | Gas elements | none listed | Gas Elements (GAS) | GE |
+| Geochemistry | Interstitial water | interstitial water | Interstitial Water (IW) | IW |
+| Geochemistry | Source rock analysis | PANGAEA (Rock-Eval pyrolysis) | Rock Eval (RE/REVAL) | SRA |
+| Physical properties | Compressional strength (penetrometer) | PANGAEA (penetrometer) | Shear Strength (PEN) | PEN |
+| Physical properties | Gamma ray attenuation bulk density | gamma ray attenuation | Bulk density (GRA) | GRA |
+| Physical properties | Moisture and density | density and porosity | Moisture and Density (MAD) | MAD |
+| Physical properties | Natural gamma radiation | none listed | Natural Gamma Radiation (NGR) | NGR |
+| Physical properties | P-wave velocity (split-core) | sonic velocity | P-Wave Velocity (PWS, Split-Core System) | PWC, PWB |
+| Physical properties | P-wave velocity (logger) | sonic velocity | P-Wave Velocity (PWL, Whole-Core System) | PWL |
+| Physical properties | Color reflectance | none listed | Color Reflectance (RSC) | RSC |
+| Physical properties | RGB | none listed | Digital Imaging RGB Channels (RGB) | RGB |
+| Physical properties | Shear strength (vane) | vane shear | Shear Strength (AVS) | AVS |
+| Physical properties | Shear strength (torvane) | vane shear | Shear Strength (TOR) | TOR |
+| Physical properties | Thermal conductivity | PANGAEA (thermal conductivity) | Thermal Conductivity (TCON) | TCON |
+
+Notes:
+
+- DSDP sources are categories of the DSDP Data Access application unless
+  PANGAEA is named. Where the table lists no DSDP data type, a DSDP request
+  returns a message rather than a substitute.
+- Split-core P-wave velocity corresponds to two LIMS reports, the caliper
+  (PWC) and bayonet (PWB) systems. Both are retrieved and returned in one
+  table with a `LIMS report` column that identifies each row.
+- ODP reports are listed for reference; ODP data are not yet retrievable
+  (see *Known limitations*).
 
 ## Methods
 
@@ -204,7 +257,10 @@ pytest
 ```
 
 Network services are replaced by recorded or synthetic responses, so the
-suite runs offline. Continuous integration runs the suite and `ruff` on
+suite runs offline. Two further commands make real requests and are run
+on demand (or by the `live checks` workflow): `python -m
+sod_explorer.sources.check_lore` and `python -m
+sod_explorer.sources.check_live`. Continuous integration runs the suite and `ruff` on
 Python 3.11 to 3.13 (`.github/workflows/tests.yml`).
 
 ## Package layout
@@ -233,8 +289,12 @@ tests/             Test suite and fixtures
 - Sites and holes for Expeditions 380, 389, and 405 are not yet in the
   reference table; these expeditions can be selected, but only with Site and
   Hole left blank.
-- DSDP retrieval automates a third-party web application and will fail if
-  its page layout changes.
+- The LORE names of eleven LIMS reports (all except GRA, MAD, PWL, NGR, TCON,
+  and AVS) have not been verified against LORE. The client tries the LIMS
+  analysis code first and then alternatives; run
+  `python -m sod_explorer.sources.check_lore` to see which resolve.
+- DSDP retrieval automates the DSDP Data Access web application (used with
+  its maintainer's permission) and will fail if its page layout changes.
 - The merge pairs nearest samples; it does not interpolate.
 - The effective-sample-size correction is an approximation (see *Methods*).
 
@@ -252,12 +312,19 @@ time-varying field. *Journal of Climate*, 12(7), 1990-2009.
 Childress, L. B. (2026). *Scientific Ocean Drilling Legacy Data Access: Quick
 Start Guide*, version 1.0. Gulf Coast Repository, Texas A&M University.
 
+Childress, L. B. (2026). *SOD Data Types* [unpublished cross-program table of
+DSDP, ODP, and IODP data types and sources]. Gulf Coast Repository, Texas A&M
+University.
+
 IODP-MI (2011). *IODP Depth Scales Terminology*, version 2.0.
 
 ## Acknowledgments
 
 Developed during an internship at the IODP Gulf Coast Repository, Texas A&M
-University.
+University, under the supervision of Laurel B. Childress, who provided the
+Expedition/Site/Hole reference table, the cross-program data-type table, the
+Legacy Data Access guide, permission to retrieve DSDP data through the DSDP
+Data Access application, and a review of the interface.
 
 ## License
 

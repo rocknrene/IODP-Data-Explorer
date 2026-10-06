@@ -1,0 +1,10 @@
+/* DATA DESCRIPTION:
+Citation:	Shipboard Scientific Party (1975): Gamma ray attenuation porosity evaluator (GRAPE) bulk density of DSDP Hole 29-280A. PANGAEA, https://doi.org/10.1594/PANGAEA.123456
+In:	Kennett, JP et al. (eds.), Initial Reports of the Deep Sea Drilling Project
+License:	Creative Commons Attribution 3.0 Unported (CC-BY-3.0)
+Size:	3 data points
+*/
+Event label	Depth [m]	Dens [g/cm**3]
+29-280A	1.10	1.55
+29-280A	1.20	1.57
+29-280A	1.30	1.60

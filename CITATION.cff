@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below, and cite the source datasets listed in each export's CITATION.txt."
+title: "SOD Explorer"
+version: 2.0.0
+abstract: "Retrieval, depth-registered merging, and visualization of scientific ocean drilling data from DSDP, ODP, and IODP, with machine-readable provenance for every export."
+type: software
+license: MIT
+authors:
+  - family-names: Castillo
+    given-names: René
+    affiliation: "School of Earth Sciences, The Ohio State University"
+url: "https://huggingface.co/spaces/rocknrene/IODP-Data-Explorer"
+repository-code: "https://github.com/rocknrene/IODP-Data-Explorer"
+doi: 10.5281/zenodo.20669063
+keywords:
+  - scientific ocean drilling
+  - IODP
+  - ODP
+  - DSDP
+  - physical properties
+  - data provenance
