@@ -1,476 +1,195 @@
-"""Client for the LIMS Online Report Environment (LORE).
+"""Client for the NOAA NCEI archive of JOIDES Resolution core data.
 
-LORE (https://web.iodp.tamu.edu/LORE/) is the public report interface to
-the Laboratory Information Management System (LIMS) database of the
-JOIDES Resolution Science Operator. The LORE web page is a template whose
-tables are populated by three JSON services on the same host; this client
-calls the same services:
+NOAA's National Centers for Environmental Information (NCEI, formerly
+NGDC) archive the shipboard core data of the Ocean Drilling Program (ODP,
+Legs 101 to 210) as exported from the Janus database. The archive is the
+primary shipboard data source for ODP listed in the *Scientific Ocean
+Drilling Legacy Data Access: Quick Start Guide* (Childress, v1.0, 2026).
 
-1. ``/reference/HeaderDisplayGet-LORE``: column headers of the report. This
-   call also establishes which LORE report name is valid (see
-   :func:`resolve_report_name`).
-2. ``/limsM/AWorkingSetGet-LORE``: identifiers of the tests that match the
-   Expedition, Site, and Hole filters.
-3. ``/limsM/DisplayGet-LORE``: result rows, requested in batches of test
-   identifiers.
+Archive layout
+--------------
+Data are stored by Leg and Hole, one tab-delimited text file per data
+type::
 
-Public access uses LORE's guest credentials (``GUEST``/``guest``). Requests
-are issued sequentially with a fixed pause, identify the client in the
-User-Agent header, and back off exponentially on HTTP 429, 502, 503, and
-504 responses (HTTP 500 is not retried, because LORE may answer an
-unrecognized report name with it). Successful responses are cached in memory for the lifetime of
-the process.
+    {base}/{leg}/{site}{hole}/{type}_{leg}_{site}{hole}.txt
+    .../joides_resolution/204/1244c/carb_204_1244c.txt
 
-Depths are requested on LORE's default depth scale set (scale identifier
-11331), which reports both CSF-A and CSF-B.
+Folder and file names are lower case. The first line of a file holds the
+column names (``Leg``, ``Site``, ``Hole``, ``Core``, ``Type``, ``Section``,
+``Top (cm)``, ``Bottom (cm)``, ``Depth (mbsf)``, then the measurements);
+lines end with a trailing tab. Depths are in metres below seafloor (mbsf).
+The layout was established from the archive's directory listings and from
+the carbonate and moisture-and-density files of Leg 204, Hole 1244C
+(R. Castillo, 2026-10-06). The archive also holds one file per data type
+for all of ODP (``odp_all_{type}.txt.gz``, up to 177 MB); these are not
+used.
+
+Access
+------
+The archive is public. Its ``robots.txt`` excludes automated crawlers from
+the data directories, so this client does not index or traverse the
+archive: it requests only the file for a Hole that a user has asked for
+(one request per Hole and data type), identifies itself in the
+``User-Agent`` header, pauses between requests, and caches results so that
+a file is not downloaded twice. The Holes of a Leg are taken from the
+reference table (:mod:`sod_explorer.reference`), not from directory
+listings.
+
+Citation
+--------
+Ocean Drilling Program (2005): Archive of Core and Site/Hole Data and
+Photographs from the Ocean Drilling Program (ODP). National Geophysical
+Data Center, NOAA. doi:10.7289/V5W37T8C
 """
 
 from __future__ import annotations
 
-import json
+import io
 import time
 from functools import lru_cache
-from html import unescape
 
 import pandas as pd
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 from ..provenance import utc_now
-from .catalog import LoreReport, get_report, report_label
-from .common import USER_AGENT, SourceError, describe_request, restrict_to_request, validate_identifier
+from ..reference import UNLETTERED_HOLE, holes_for_site, sites_for_expedition
+from .catalog import get_report, report_label
+from .common import USER_AGENT, SourceError, restrict_to_request, validate_identifier
 
-LORE_HOST = "https://web.iodp.tamu.edu"
-LORE_PAGE = f"{LORE_HOST}/LORE/"
-LORE_USER, LORE_PASSWORD = "GUEST", "guest"
-LORE_SCALE_ID = "11331"
-BATCH_SIZE = 200          # test identifiers per DisplayGet request
-PAUSE_S = 0.5             # pause after each request
-TIMEOUT_S = 60            # per-request timeout
-CACHE_SIZE = 64           # number of distinct requests cached
+NCEI_BASE = "https://www.ngdc.noaa.gov/mgg/geology/data/joides_resolution"
+ODP_DOI = "10.7289/V5W37T8C"
+ODP_CITATION = ("Ocean Drilling Program (2005): Archive of Core and Site/Hole Data and Photographs "
+                "from the Ocean Drilling Program (ODP). National Geophysical Data Center, NOAA. "
+                f"doi:{ODP_DOI}")
+TIMEOUT_S = 60
+PAUSE_S = 0.3            # pause between requests to the archive
+MAX_HOLES = 60           # most Holes requested for one Leg-wide or Site-wide request
+CACHE_SIZE = 256
 
-_HEADERS = {
-    "User-Agent": USER_AGENT,
-    "Accept": "application/json, text/javascript, */*; q=0.01",
-    "X-Requested-With": "XMLHttpRequest",
-    "Referer": LORE_PAGE,
-}
+#: Columns that every data file of the archive begins with.
+_REQUIRED_COLUMNS = ("Leg", "Site", "Hole")
 
 
-def _session() -> requests.Session:
-    """HTTP session with retry and exponential backoff (2, 4, 8, 16 s).
+def file_url(code: str, leg: str, site: str, hole: str) -> str:
+    """URL of the file of one data type for one Hole."""
+    location = f"{site}{hole}".lower()
+    return f"{NCEI_BASE}/{leg}/{location}/{code}_{leg}_{location}.txt"
 
-    The LORE page is requested once so that any session cookies it sets
-    accompany the data requests; failure of that request is not fatal.
+
+def parse_data_file(text: str) -> pd.DataFrame:
+    """Parse a tab-delimited data file of the archive.
+
+    Column names are stripped of surrounding blanks, and the empty column
+    produced by the trailing tab of each line is removed.
+
+    Raises
+    ------
+    SourceError
+        If the text is not a data file (for example, an HTML error page).
     """
-    session = requests.Session()
-    session.headers.update(_HEADERS)
-    retry = Retry(total=4, backoff_factor=2, status_forcelist=(429, 502, 503, 504),
-                  allowed_methods=("GET",), respect_retry_after_header=True)
-    session.mount("https://", HTTPAdapter(max_retries=retry))
     try:
-        session.get(LORE_PAGE, timeout=TIMEOUT_S)
-    except requests.RequestException:
-        pass
-    return session
-
-
-def _get_json(session: requests.Session, path: str, params: dict):
-    """Issue one GET request to a LORE service and decode the JSON body."""
-    response = session.get(f"{LORE_HOST}{path}", params=params, timeout=TIMEOUT_S)
-    time.sleep(PAUSE_S)
-    if response.status_code == 403:
-        raise SourceError("LORE refused the request (HTTP 403). Try again in a few "
-                          "minutes, or use Local file upload.")
-    response.raise_for_status()
-    return response.json()
-
-
-def rows_to_frame(rows: list[list], headers: list[str]) -> pd.DataFrame:
-    """Convert LORE's list-of-lists rows to a table.
-
-    Rows shorter than the widest row are padded with blanks; columns beyond
-    the supplied headers are named ``col_<i>``. A column is converted to
-    numeric only if every non-blank value parses as a number, so that
-    identifier columns with mixed content are preserved as text.
-    """
-    width = max(len(r) for r in rows)
-    names = list(headers[:width]) + [f"col_{i}" for i in range(len(headers), width)]
-    df = pd.DataFrame([list(r) + [""] * (width - len(r)) for r in rows], columns=names)
-    for column in df.columns:
-        text = df[column].astype(str).str.strip()
-        nonblank = text.ne("")
-        converted = pd.to_numeric(df[column].where(nonblank), errors="coerce")
-        if nonblank.any() and converted[nonblank].notna().all():
-            df[column] = converted
+        df = pd.read_csv(io.StringIO(text), sep="\t", dtype={"Site": str, "Hole": str})
+    except (pd.errors.ParserError, pd.errors.EmptyDataError) as exc:
+        raise SourceError(f"The NCEI file could not be parsed: {exc}") from exc
+    df.columns = [str(c).strip() for c in df.columns]
+    df = df.loc[:, [c for c in df.columns if not (c.startswith("Unnamed") and df[c].isna().all())]]
+    if any(c not in df.columns for c in _REQUIRED_COLUMNS):
+        raise SourceError("The NCEI response is not a data file (no Leg, Site, and Hole columns)")
     return df
 
 
-def resolve_report_name(session: requests.Session, report: LoreReport) -> tuple[str, list[str]]:
-    """Find the LORE report name for a LIMS report and return its column headers.
-
-    Each candidate name is submitted to LORE's header service in order; the
-    first for which LORE returns a non-empty header list is used. A name
-    listed in :data:`~sod_explorer.sources.catalog.VERIFIED_LORE_NAMES`
-    is accepted on the same evidence, so a verified name and a candidate are
-    treated identically at run time.
-
-    Returns
-    -------
-    name : str
-        The LORE report name.
-    headers : list of str
-        Column headers of the report, HTML entities decoded.
-
-    Raises
-    ------
-    SourceError
-        If LORE recognizes none of the candidates.
-    """
-    for name in report.candidates:
-        try:
-            response = _get_json(session, "/reference/HeaderDisplayGet-LORE", {
-                "name": name, "scaleid": LORE_SCALE_ID, "splice": "test",
-            })
-        except (requests.HTTPError, ValueError):
-            continue  # LORE does not recognize this name; try the next candidate
-        headers = response.get("headers") if isinstance(response, dict) else None
-        if headers:
-            return name, [unescape(h) for h in headers]
-    tried = ", ".join(report.candidates)
-    raise SourceError(f"LORE did not recognize a report name for {report.code} (tried: {tried})")
-
-
-#: Columns of ``carbonates_internal`` that identify a sample.
-_CARBONATE_SAMPLE_COLUMNS = ("Exp", "Site", "Hole", "Core", "Type", "Sect", "A/W", "Text ID",
-                             "Top offset on sect (cm)", "Bot offset on sect (cm)",
-                             "Depth CSF-A (m)", "Depth CSF-B (m)", "Sample comments")
-#: CHNS result columns of ``carbonates_internal`` and their names in LORE's Carbonates report.
-_CHNS_COLUMNS = {
-    "carbon_percent": "Total carbon (wt%)",
-    "hydrogen_percent": "Hydrogen (wt%)",
-    "nitrogen_percent": "Nitrogen (wt%)",
-    "sulfur_percent": "Sulfur (wt%)",
-    "carbon_organic_percent": "Organic carbon (wt%), CHNS with treated sample (wt%)",
-    "treatment_method": "Sample treatment method (CHNS organic carbon)",
-}
-#: Mass ratio CaCO3 / C used by LORE to convert inorganic carbon to calcium carbonate.
-CARBONATE_FACTOR = 8.333
-
-
-def assemble_carbonates(raw: pd.DataFrame) -> pd.DataFrame:
-    """Assemble LORE's Carbonates report from the rows of ``carbonates_internal``.
-
-    The internal report holds one row per test: a coulometric test (COUL)
-    reports inorganic carbon, and an elemental-analyzer test (CHNS) reports
-    total carbon, hydrogen, nitrogen, and sulfur, all in the same result
-    columns, distinguished by the ``Analysis`` column. Following LORE's
-    report definition (``/reference/ReportDefinitionGet-LORE?name=carbonates``),
-    the tests of a sample are placed on one row and two quantities are
-    computed:
-
-    * calcium carbonate (wt%) = inorganic carbon (wt%) x 8.333;
-    * organic carbon by difference (wt%) = total carbon - inorganic carbon.
-
-    Replicate tests of a sample are kept on separate rows (first COUL with
-    first CHNS, second with second, and so on); a ``Replicate`` column is
-    added when any sample has more than one. If the table does not have
-    the expected columns, it is returned unchanged.
-    """
-    if "Analysis" not in raw.columns or "carbon_percent" not in raw.columns:
-        return raw
-    keys = [c for c in _CARBONATE_SAMPLE_COLUMNS if c in raw.columns]
-    analysis = raw["Analysis"].astype(str).str.strip().str.upper()
-    blank = "\x00"   # groupby drops missing keys, so blanks are given a placeholder
-
-    def part(code: str, columns: dict[str, str]) -> pd.DataFrame:
-        present = {c: n for c, n in columns.items() if c in raw.columns}
-        rows = raw.loc[analysis == code, keys + list(present)].rename(columns=present)
-        rows[keys] = rows[keys].astype(object).where(rows[keys].notna(), blank)
-        rows["Replicate"] = rows.groupby(keys, sort=False).cumcount() + 1
-        return rows
-
-    coul = part("COUL", {"carbon_percent": "Inorganic carbon (wt%)"})
-    chns = part("CHNS", _CHNS_COLUMNS)
-    if coul.empty and chns.empty:
-        return raw
-    table = coul.merge(chns, on=keys + ["Replicate"], how="outer", sort=False)
-    table[keys] = table[keys].where(table[keys] != blank)
-    for column in ("Inorganic carbon (wt%)", "Total carbon (wt%)"):
-        if column not in table.columns:
-            table[column] = float("nan")
-        table[column] = pd.to_numeric(table[column], errors="coerce")
-    table["Calcium carbonate (wt%)"] = (table["Inorganic carbon (wt%)"] * CARBONATE_FACTOR).round(3)
-    table["Organic carbon (wt%) by difference (CHNS-COUL)"] = (
-        table["Total carbon (wt%)"] - table["Inorganic carbon (wt%)"]).round(2)
-
-    measured = ["Inorganic carbon (wt%)", "Calcium carbonate (wt%)", "Total carbon (wt%)",
-                "Organic carbon (wt%) by difference (CHNS-COUL)"]
-    measured += [n for n in _CHNS_COLUMNS.values() if n in table.columns and n not in measured]
-    identifiers = [k for k in keys if k != "Sample comments"]
-    order = identifiers + (["Replicate"] if table["Replicate"].max() > 1 else []) + measured
-    order += ["Sample comments"] if "Sample comments" in keys else []
-    for column in identifiers:
-        converted = pd.to_numeric(table[column], errors="coerce")
-        if converted.notna().sum() == table[column].notna().sum():
-            table[column] = converted
-    sort_by = [c for c in ("Site", "Hole", "Depth CSF-A (m)") if c in table.columns]
-    return table[order].sort_values(sort_by, kind="stable").reset_index(drop=True)
-
-
-def _header_text(parts, row: pd.Series | None = None) -> str:
-    """Column name from a definition header: literal text, and row values where a column is referenced."""
-    if isinstance(parts, dict):
-        parts = [parts]
-    pieces = []
-    for part in parts or []:
-        if "text" in part:
-            pieces.append(str(part["text"]))
-        elif "col" in part and row is not None:
-            value = row.iloc[int(part["col"])]
-            pieces.append("" if pd.isna(value) else str(value).strip())
-    text = unescape(" ".join(pieces).replace("</br>", " ").replace("<br>", " "))
-    return " ".join(text.replace("\u00c2\u00b5", "\u00b5").split())
-
-
-def assemble_composite(raw: pd.DataFrame, definition: dict) -> pd.DataFrame:
-    """Assemble a composite LORE report from its internal report and report definition.
-
-    LORE builds some reports (Interstitial Water, Gas Elements) in the
-    browser. The internal report holds one row per result; the report
-    definition (``/reference/ReportDefinitionGet-LORE``) states, by column
-    position, which column names the analysis, which columns identify an
-    output row, which columns are copied, and how results become columns:
-
-    * a ``fixedvalue`` template gives a named output column for a result
-      column of one analysis (for example, alkalinity from ALKALINITY);
-    * a ``match`` template gives one output column for each distinct value
-      of the matched columns (for example, one column per element and
-      wavelength measured by ICP-AES), named from those values.
-
-    This function applies the definition. Rows are grouped by Expedition,
-    Site, Hole, and the definition's row-separator columns. Where a group
-    holds several values for the same output column (replicates), they are
-    placed on successive rows and a ``Replicate`` column is added. Values
-    are not rounded. If the definition cannot be applied to the table, the
-    table is returned unchanged.
-    """
-    try:
-        fmt = definition["formatdefinition"]["columns"]
-        analysis_col = int(definition["analysiscol"])
-        separators = definition["rowseperatorcol"]
-        separators = [int(c) for c in (separators if isinstance(separators, list) else [separators])]
-        width = raw.shape[1]
-        plain = [(int(c["col"]), c.get("header", {})) for c in fmt if "col" in c and "template" not in c]
-        templates = [t for c in fmt for t in c.get("template", [])]
-        positions = [analysis_col, *separators, *(i for i, _ in plain)]
-        if not templates or max(positions) >= width:
-            return raw
-    except (KeyError, TypeError, ValueError):
-        return raw
-
-    names = list(raw.columns)
-    location = [i for i, n in enumerate(names) if n in ("Exp", "Site", "Hole")]
-    key_positions = list(dict.fromkeys(location + separators))
-    blank = "\x00"
-    keys = raw.iloc[:, key_positions].astype(object)
-    keys = keys.where(keys.notna(), blank)
-    key = pd.Series(list(map(tuple, keys.to_numpy())), index=raw.index)
-    analysis = raw.iloc[:, analysis_col].astype(str).str.strip().str.upper()
-
-    records, order = [], []
-    for template in templates:
-        rows = raw[analysis == str(template.get("analysis", "")).upper()]
-        if rows.empty:
-            continue
-        if "fixedvalue" in template:
-            specs = [(int(f["source"]), None, f.get("header")) for f in template["fixedvalue"]]
-        elif "source" in template:
-            specs = [(int(template["source"]), template.get("header"), None)]
-        else:
-            continue   # computed columns are not used by the reports assembled here
-        for source, per_row_header, fixed_header in specs:
-            if source >= width:
-                continue
-            values = rows.iloc[:, source]
-            present = values.notna() & values.astype(str).str.strip().ne("")
-            for index in rows.index[present]:
-                name = (_header_text(fixed_header) if fixed_header is not None
-                        else _header_text(per_row_header, raw.loc[index]))
-                if name:
-                    records.append((key[index], name, values[index]))
-                    if name not in order:
-                        order.append(name)
-    if not records:
-        return raw
-
-    long = pd.DataFrame(records, columns=["key", "column", "value"])
-    long["Replicate"] = long.groupby(["key", "column"], sort=False).cumcount() + 1
-    wide = long.pivot(index=["key", "Replicate"], columns="column", values="value")[order].reset_index()
-
-    first = raw.groupby(key, sort=False).head(1)
-    first_key = key[first.index]
-    copied = {}
-    for position, header in plain:
-        name = _header_text(header) if "text" in header else names[position]
-        copied[name.strip() or names[position]] = first.iloc[:, position].to_numpy()
-    identifiers = pd.DataFrame(copied)
-    identifiers.insert(0, "key", first_key.to_numpy())
-    table = identifiers.merge(wide, on="key", how="inner").drop(columns="key")
-
-    leading = [c for c in identifiers.columns if c != "key"]
-    trailing = [c for c in leading if "comment" in c.lower() or c in ("Text ID", "Test No.")]
-    leading = [c for c in leading if c not in trailing]
-    replicate = ["Replicate"] if table["Replicate"].max() > 1 else []
-    table = table[leading + replicate + order + trailing]
-    for column in order + leading:
-        converted = pd.to_numeric(table[column], errors="coerce")
-        if converted.notna().sum() == table[column].notna().sum():
-            table[column] = converted
-    depth = next((c for c in leading if "depth" in c.lower()), None)
-    sort_by = [c for c in ("Site", "Hole") if c in table.columns] + ([depth] if depth else [])
-    return table.sort_values(sort_by + replicate, kind="stable").reset_index(drop=True)
-
-
-@lru_cache(maxsize=8)
-def report_definition(name: str) -> dict | None:
-    """LORE's definition of a composite report, or ``None`` if it cannot be read."""
-    try:
-        response = requests.get(f"{LORE_HOST}/reference/ReportDefinitionGet-LORE", params={"name": name},
-                                headers=_HEADERS, timeout=TIMEOUT_S)
-        response.raise_for_status()
-        definition = response.json()
-        if isinstance(definition, dict) and isinstance(definition.get("definition"), str):
-            definition = json.loads(definition["definition"])   # sent as a JSON string inside JSON
-    except (requests.RequestException, ValueError):
-        return None
-    return definition if isinstance(definition, dict) and "formatdefinition" in definition else None
-
-
 @lru_cache(maxsize=CACHE_SIZE)
-def _fetch_cached(report: LoreReport, expedition: str, site: str, hole: str) -> tuple[pd.DataFrame, str]:
-    """Retrieve one LIMS report from LORE. Raises :class:`SourceError` on failure.
+def _fetch_file(code: str, leg: str, site: str, hole: str) -> pd.DataFrame | None:
+    """Download and parse one file; ``None`` if the archive has no such file.
 
-    Only successful calls are cached: :func:`functools.lru_cache` does not
-    store calls that raise, so a failed request is retried on the next call.
-
-    Returns
-    -------
-    df : pandas.DataFrame
-        Report rows restricted to the request.
-    name : str
-        The LORE report name that was used.
+    Results, including absences, are cached. Network failures raise and are
+    therefore not cached.
     """
-    filters = [f"x_expedition in ('{expedition}')"]
-    if site:
-        filters.append(f"x_site in ('{site}')")
-    if hole:
-        filters.append(f"x_hole in ('{hole}')")
-    post = json.dumps({"scale_id": LORE_SCALE_ID})
-    where = describe_request(expedition, site, hole)
-
+    url = file_url(code, leg, site, hole)
     try:
-        session = _session()
-        name, headers = resolve_report_name(session, report)
-        test_ids = _get_json(session, "/limsM/AWorkingSetGet-LORE", {
-            "username": LORE_USER, "password": LORE_PASSWORD, "report": name,
-            "postretrieve": post, "filters": json.dumps(filters),
-        })
-        if not isinstance(test_ids, list) or not test_ids:
-            raise SourceError(f"LORE has no {report.code} data for {where}")
-        rows: list[list] = []
-        for start in range(0, len(test_ids), BATCH_SIZE):
-            batch = test_ids[start:start + BATCH_SIZE]
-            chunk = _get_json(session, "/limsM/DisplayGet-LORE", {
-                "name": name, "id": "[" + ",".join(str(x) for x in batch) + "]",
-                "postretrieve": post, "username": LORE_USER, "password": LORE_PASSWORD,
-                "nolink": "true",
-            })
-            if isinstance(chunk, list):
-                rows.extend(chunk)
+        response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT_S)
     except requests.RequestException as exc:
-        raise SourceError(f"Could not reach LORE: {exc}") from exc
-    except ValueError as exc:
-        raise SourceError("LORE returned a response that is not valid JSON") from exc
+        raise SourceError(f"Could not reach the NCEI archive: {exc}") from exc
+    finally:
+        time.sleep(PAUSE_S)
+    if response.status_code == 404:
+        return None
+    if response.status_code != 200:
+        raise SourceError(f"The NCEI archive answered HTTP {response.status_code} for {url}")
+    response.encoding = response.encoding or "utf-8"
+    return parse_data_file(response.text)
 
-    if not rows:
-        raise SourceError(f"LORE returned no {report.code} rows for {where}")
-    df = restrict_to_request(rows_to_frame(rows, headers), expedition, site, hole)
-    if df.empty:
-        raise SourceError(f"LORE returned {report.code} rows, but none for {where}")
-    if report.transform == "carbonates":
-        df = assemble_carbonates(df)
-    elif report.transform and report.transform.startswith("definition:"):
-        definition = report_definition(report.transform.split(":", 1)[1])
-        if definition is not None:
-            df = assemble_composite(df, definition)
-    return df, name
+
+def _requested_holes(leg: str, site: str, hole: str) -> list[tuple[str, str]]:
+    """(Site, Hole) pairs to request, from the request or the reference table."""
+    if site and hole:
+        return [(site, hole)]
+    sites = [site] if site else sites_for_expedition(leg)
+    pairs = [(s, h) for s in sites for h in holes_for_site(leg, s) if h != UNLETTERED_HOLE]
+    if not pairs:
+        raise SourceError(f"The reference table lists no Holes for Leg {leg}"
+                          + (f", Site {site}" if site else "") + "; select a Site and Hole.")
+    if len(pairs) > MAX_HOLES:
+        raise SourceError(f"Leg {leg} has {len(pairs)} Holes; select a Site to limit the request.")
+    return pairs
 
 
 def fetch(report_key: str, expedition: str, site: str = "", hole: str = "") -> tuple[pd.DataFrame, dict]:
-    """Retrieve a report type from LORE.
+    """Retrieve a report type for an ODP Leg from the NCEI archive.
 
-    A report type that corresponds to several LIMS reports (split-core
-    P-wave velocity is measured with the caliper, PWC, and bayonet, PWB,
-    systems) is retrieved report by report and returned as one table with a
-    leading ``LIMS report`` column that names the report of each row. LIMS
-    reports with no data for the request are omitted.
-
-    Parameters
-    ----------
-    report_key
-        Report key from :data:`~sod_explorer.sources.catalog.REPORTS`.
-    expedition, site, hole
-        Request filters. Site and Hole are optional.
+    If no Hole is given, every Hole of the Site (or of the Leg) listed in
+    the reference table is requested. A report type stored as several data
+    types (split-core P-wave velocity: ``pws1``, ``pws2``, ``pws3``) is
+    returned as one table with a leading ``NCEI data type`` column.
 
     Returns
     -------
     df : pandas.DataFrame
-        Report rows restricted to the requested Expedition, Site, and Hole.
+        Rows restricted to the requested Leg, Site, and Hole.
     source : dict
-        Provenance source description.
+        Provenance source description, including the URL of every file used.
 
     Raises
     ------
     SourceError
-        If the report type has no LIMS report, LORE is unreachable, or no
-        LIMS report returns rows.
+        If the report type has no ODP data type, the archive is
+        unreachable, or it holds no file for the request.
     """
     report_type = get_report(report_key)
-    if report_type is None or not report_type.lore_reports:
-        raise SourceError(f"LIMS has no report for {report_label(report_key)}")
-    expedition = validate_identifier(str(expedition or ""), "Expedition")
+    if report_type is None or not report_type.ncei_codes:
+        raise SourceError(f"{report_label(report_key)} was not measured during ODP "
+                          "(the NCEI archive has no such data type)")
+    leg = validate_identifier(str(expedition or ""), "Leg")
     site = validate_identifier(site, "Site").upper()
-    hole = validate_identifier(hole, "Hole").upper()
+    hole = validate_identifier("" if hole == UNLETTERED_HOLE else hole, "Hole").upper()
 
-    tables, used, errors = [], [], []
-    for lore_report in report_type.lore_reports:
-        try:
-            table, name = _fetch_cached(lore_report, expedition, site, hole)
-        except SourceError as exc:
-            errors.append(str(exc))
-            continue
-        table = table.copy()
-        if len(report_type.lore_reports) > 1:
-            table.insert(0, "LIMS report", lore_report.code)
-        tables.append(table)
-        used.append({"code": lore_report.code, "lore_report": name, "rows": int(len(table))})
+    tables, files = [], []
+    for hole_site, hole_letter in _requested_holes(leg, site, hole):
+        for code in report_type.ncei_codes:
+            table = _fetch_file(code, leg, hole_site, hole_letter)
+            if table is None or table.empty:
+                continue
+            table = table.copy()
+            if len(report_type.ncei_codes) > 1:
+                table.insert(0, "NCEI data type", code)
+            tables.append(table)
+            files.append({"url": file_url(code, leg, hole_site, hole_letter), "rows": int(len(table))})
+    where = f"Leg {leg}" + (f", {site}{hole}" if site else "")
     if not tables:
-        raise SourceError("; ".join(errors))
+        raise SourceError(f"The NCEI archive has no {report_label(report_key)} file for {where}")
     df = pd.concat(tables, ignore_index=True) if len(tables) > 1 else tables[0]
+    df = restrict_to_request(df, leg, site, hole)
+    if df.empty:
+        raise SourceError(f"The NCEI files hold no {report_label(report_key)} rows for {where}")
 
     source = {
-        "type": "lore",
-        "name": "LIMS Online Report Environment (LORE)",
-        "url": LORE_PAGE,
-        "query": {"report": report_key, "lims_reports": used, "expedition": expedition,
-                  "site": site, "hole": hole, "scale_id": LORE_SCALE_ID},
+        "type": "ncei",
+        "name": "NOAA NCEI archive of JOIDES Resolution core data",
+        "url": f"{NCEI_BASE}/{leg}/",
+        "doi": ODP_DOI,
+        "query": {"report": report_key, "ncei_data_types": list(report_type.ncei_codes),
+                  "leg": leg, "site": site, "hole": hole, "files": files},
         "retrieved_utc": utc_now(),
-        "citation_note": (f"IODP LIMS data for Expedition {expedition}, retrieved from LORE "
-                          f"({LORE_PAGE}). Cite the Proceedings of the International Ocean "
-                          f"Discovery Program volume for Expedition {expedition}."),
+        "citation_note": ODP_CITATION,
     }
-    if errors:
-        source["query"]["lims_reports_without_data"] = errors
     return df, source
