@@ -91,7 +91,7 @@ class TestLore:
             return {"headers": []}
 
         monkeypatch.setattr(lore, "_get_json", header_service)
-        report = catalog.REPORTS["gas_elements"].lore_reports[0]
+        report = catalog.LoreReport("GE", ("ge", "gaselements", "gas"))
         name, headers = lore.resolve_report_name(None, report)
         assert name == "gaselements" and asked == ["ge", "gaselements"]
         assert headers == ["Exp", "Methane (ppmv)"]
@@ -421,3 +421,47 @@ class TestCarbonateAssembly:
     def test_unexpected_table_is_returned_unchanged(self):
         frame = pd.DataFrame({"x": [1]})
         assert lore.assemble_carbonates(frame) is frame
+
+
+class TestCompositeAssembly:
+    DEFINITION = {
+        "analysiscol": "9", "rowseperatorcol": ["4"],
+        "formatdefinition": {"columns": [
+            {"header": {"text": "Exp"}, "col": "1"}, {"header": {"text": "Site"}, "col": "2"},
+            {"header": {"text": "Hole"}, "col": "3"}, {"header": {"text": "Top depth CSF-A (m)"}, "col": "4"},
+            {"template": [
+                {"analysis": "ICPAES",
+                 "header": [{"col": "5"}, {"text": "</br>"}, {"col": "7"}, {"text": "nm </br>ICPAES"}],
+                 "match": ["5", "7"], "source": "6"},
+                {"analysis": "ALKALINITY", "fixedvalue": [
+                    {"source": "8", "header": [{"text": "Alkalinity (mM) ALKALINITY"}]}]},
+            ]},
+        ]},
+    }
+    COLUMNS = ["sample_number", "Exp", "Site", "Hole", "Top depth CSF-A (m)", "calibrated_name",
+               "concentration", "wavelength", "alkalinity", "Analysis"]
+
+    def _raw(self):
+        rows = [
+            [1, 362, "U1480", "E", 7.4, "Ba (uM)", 2.5, 455.4, None, "ICPAES"],
+            [2, 362, "U1480", "E", 2.9, "Ba (uM)", 1.5, 455.4, None, "ICPAES"],
+            [3, 362, "U1480", "E", 2.9, "Ca (mM)", 10.2, 315.9, None, "ICPAES"],
+            [4, 362, "U1480", "E", 2.9, None, None, None, 3.1, "ALKALINITY"],
+            [5, 362, "U1480", "E", 2.9, None, None, None, 3.3, "ALKALINITY"],
+        ]
+        return pd.DataFrame(rows, columns=self.COLUMNS)
+
+    def test_results_become_columns_one_row_per_sample(self):
+        table = lore.assemble_composite(self._raw(), self.DEFINITION)
+        assert list(table.columns) == ["Exp", "Site", "Hole", "Top depth CSF-A (m)", "Replicate",
+                                       "Ba (uM) 455.4 nm ICPAES", "Ca (mM) 315.9 nm ICPAES",
+                                       "Alkalinity (mM) ALKALINITY"]
+        assert table["Top depth CSF-A (m)"].tolist() == [2.9, 2.9, 7.4]
+        assert table["Ba (uM) 455.4 nm ICPAES"].tolist()[0] == 1.5 and table.iloc[2, 5] == 2.5
+        assert table["Alkalinity (mM) ALKALINITY"].tolist()[:2] == [3.1, 3.3]      # replicates kept
+        assert table["Replicate"].tolist() == [1, 2, 1]
+
+    def test_table_that_does_not_fit_the_definition_is_returned_unchanged(self):
+        frame = pd.DataFrame({"x": [1]})
+        assert lore.assemble_composite(frame, self.DEFINITION) is frame
+        assert lore.assemble_composite(self._raw(), {"formatdefinition": {}}).equals(self._raw())
