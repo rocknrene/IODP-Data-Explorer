@@ -253,3 +253,14 @@ class TestDetrending:
         values = np.array([0, 1, 2, 10, 12, 14], dtype=float)
         residuals = analysis.detrend_by_depth(values, depth, ["a"] * 3 + ["b"] * 3)
         assert np.allclose(residuals, 0)
+
+
+def test_merge_across_holes_pairs_on_depth_alone():
+    a = pd.DataFrame({"Site": ["277"] * 3, "Hole": ["*"] * 3, "Depth (mbsf)": [1.0, 2.0, 3.0], "x": [1, 2, 3]})
+    b = pd.DataFrame({"Site": ["U1480"] * 3, "Hole": ["E"] * 3, "Depth CSF-A (m)": [1.1, 2.1, 9.0],
+                      "y": [4, 5, 6]})
+    _, report = analysis.merge_by_depth(a, b, "Depth (mbsf)", "Depth CSF-A (m)", 0.5)
+    assert report.matched == 0 and any("Pair across" in w for w in report.warnings)
+    merged, report = analysis.merge_by_depth(a, b, "Depth (mbsf)", "Depth CSF-A (m)", 0.5, across_holes=True)
+    assert report.matched == 2 and report.grouping == "none"
+    assert any("not from the same location" in w for w in report.warnings)
