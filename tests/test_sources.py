@@ -385,3 +385,39 @@ class TestNcei:
             ncei.fetch("carbonates", "204", "1244", "C")
         with pytest.raises(SourceError, match="not measured during ODP"):
             ncei.fetch("rgb", "204", "1244", "C")
+
+
+class TestCarbonateAssembly:
+    def _raw(self):
+        base = {"Exp": 362, "Site": "U1480", "Hole": "E", "Core": 1, "Type": "H", "Sect": 1, "A/W": "W",
+                "Sample comments": None, "hydrogen_percent": None, "nitrogen_percent": None,
+                "sulfur_percent": None}
+        rows = [
+            {**base, "Text ID": "CYL1", "Depth CSF-A (m)": 1.0, "Analysis": "COUL", "carbon_percent": 0.6},
+            {**base, "Text ID": "CYL1", "Depth CSF-A (m)": 1.0, "Analysis": "CHNS", "carbon_percent": 1.5,
+             "nitrogen_percent": 0.1},
+            {**base, "Text ID": "CYL2", "Depth CSF-A (m)": 5.0, "Analysis": "COUL", "carbon_percent": 0.2},
+            {**base, "Text ID": "CYL2", "Depth CSF-A (m)": 5.0, "Analysis": "COUL", "carbon_percent": 0.4},
+            {**base, "Text ID": "CYL3", "Depth CSF-A (m)": 3.0, "Analysis": "CHNS", "carbon_percent": 2.0},
+        ]
+        return pd.DataFrame(rows)
+
+    def test_one_row_per_sample_with_computed_columns(self):
+        table = lore.assemble_carbonates(self._raw())
+        assert table["Text ID"].tolist() == ["CYL1", "CYL3", "CYL2", "CYL2"]      # sorted by depth
+        first = table.iloc[0]
+        assert first["Inorganic carbon (wt%)"] == 0.6 and first["Total carbon (wt%)"] == 1.5
+        assert first["Calcium carbonate (wt%)"] == pytest.approx(5.0, abs=0.001)
+        assert first["Organic carbon (wt%) by difference (CHNS-COUL)"] == pytest.approx(0.9)
+        assert first["Nitrogen (wt%)"] == 0.1
+        assert pd.isna(table.iloc[1]["Inorganic carbon (wt%)"]) and table.iloc[1]["Total carbon (wt%)"] == 2.0
+
+    def test_replicates_are_kept(self):
+        table = lore.assemble_carbonates(self._raw())
+        replicates = table[table["Text ID"] == "CYL2"]
+        assert replicates["Replicate"].tolist() == [1, 2]
+        assert replicates["Inorganic carbon (wt%)"].tolist() == [0.2, 0.4]
+
+    def test_unexpected_table_is_returned_unchanged(self):
+        frame = pd.DataFrame({"x": [1]})
+        assert lore.assemble_carbonates(frame) is frame
