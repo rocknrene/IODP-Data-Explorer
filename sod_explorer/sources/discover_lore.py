@@ -93,6 +93,11 @@ def main() -> None:
     print("== 1. Composite reports")
     for name in COMPOSITE_REPORTS:
         definition = get_json(session, "/reference/ReportDefinitionGet-LORE", {"name": name})
+        if isinstance(definition, dict) and isinstance(definition.get("definition"), str):
+            try:   # the definition is returned as a JSON string inside a JSON object
+                definition = json.loads(definition["definition"])
+            except ValueError:
+                pass
         print(f"\n==== {name}\n-- definition:\n{json.dumps(definition, indent=1)}")
         if not isinstance(definition, dict):
             continue
