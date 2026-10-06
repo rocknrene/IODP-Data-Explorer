@@ -1,0 +1,61 @@
+# Runs the GSA Connects 2026 rapid test plan against the live archives:
+# one Hole and an entire Leg/Expedition of DSDP, ODP, and IODP data, merges
+# within and between programs, and the charts. A second step tries every
+# report type for one Hole of each program. Runs on every push to a branch
+# other than main, and on demand from the Actions tab ("Run workflow").
+#
+# Results are written to the run summary and pushed to the branch
+# results-acceptance.
+name: acceptance checks
+
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore:
+      - main
+      - "results-*"
+
+permissions:
+  contents: write
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      CHROME_BIN: /usr/bin/google-chrome
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: pip install -r requirements.txt
+      - name: Test plan (retrieval, merges, charts)
+        timeout-minutes: 30
+        run: |
+          set -o pipefail
+          export CHROMEDRIVER_PATH="${CHROMEWEBDRIVER}/chromedriver"
+          python -m sod_explorer.sources.check_acceptance 2>&1 | tee acceptance.txt
+      - name: Every report type (informative)
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 35
+        run: |
+          export CHROMEDRIVER_PATH="${CHROMEWEBDRIVER}/chromedriver"
+          python -m sod_explorer.sources.check_acceptance --all-types 2>&1 | tee acceptance_all_types.txt
+      - name: Publish results
+        if: always()
+        run: |
+          {
+            echo "## Test plan"; echo '```'; cat acceptance.txt 2>/dev/null; echo '```'
+            echo "## Every report type"; echo '```'; cat acceptance_all_types.txt 2>/dev/null; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          mkdir published && cp acceptance.txt acceptance_all_types.txt published/ 2>/dev/null || true
+          echo "commit ${GITHUB_SHA} run ${GITHUB_RUN_ID} $(date -u +%FT%TZ)" > published/RUN.txt
+          cd published
+          git init -q -b results-acceptance
+          git add .
+          git -c user.name="GitHub Action" -c user.email="action@github.com" commit -qm "acceptance check results"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" results-acceptance
