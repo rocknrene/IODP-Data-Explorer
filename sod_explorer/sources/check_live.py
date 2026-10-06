@@ -10,6 +10,7 @@ application is deployed to. This module makes one small real request to
 each source and prints whether it succeeded:
 
 * LORE: moisture and density for Expedition 362, Hole U1480E.
+* NOAA NCEI archive: carbonates for ODP Leg 204, Hole 1244C.
 * PANGAEA: a dataset search for Expedition 343 (Chikyu), and a download of
   the first dataset found that is not access-restricted (datasets under
   moratorium require a PANGAEA login and are skipped).
@@ -25,7 +26,7 @@ from __future__ import annotations
 import time
 import traceback
 
-from . import lore, pangaea, shinylaurel
+from . import lore, ncei, pangaea, shinylaurel
 from .common import SourceError
 
 
@@ -58,7 +59,12 @@ def _dsdp() -> str:
     return f"{len(df)} rows of {source['rows_downloaded']} downloaded; columns {list(df.columns)[:6]}"
 
 
-CHECKS = (("LORE", _lore), ("PANGAEA", _pangaea), ("DSDP Data Access", _dsdp))
+def _ncei() -> str:
+    df, source = ncei.fetch("carbonates", "204", "1244", "C")
+    return f"{len(df)} rows, {len(df.columns)} columns; file {source['query']['files'][0]['url']}"
+
+
+CHECKS = (("LORE", _lore), ("NCEI", _ncei), ("PANGAEA", _pangaea), ("DSDP Data Access", _dsdp))
 
 
 def main() -> int:
