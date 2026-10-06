@@ -292,10 +292,10 @@ tests/             Test suite and fixtures
   reference table; these expeditions can be selected, but only with Site and
   Hole left blank.
 - LORE assembles three reports in the browser from an internal report:
-  carbonates, interstitial water, and gas elements. Carbonates is assembled
-  by this software following LORE's report definition; interstitial water
-  and gas elements are not yet assembled and cannot be retrieved for IODP
-  JOIDES Resolution expeditions (they can for ODP, from NCEI).
+  carbonates, interstitial water, and gas elements. This software assembles
+  them in the same way, following LORE's report definitions, but does not
+  round values and keeps replicate measurements on separate rows, so a
+  table can differ in layout from the one LORE displays.
 - PANGAEA datasets under moratorium require a login and cannot be retrieved;
   the application reports this and asks for another dataset or a file upload.
 - DSDP retrieval automates the DSDP Data Access web application (used with
