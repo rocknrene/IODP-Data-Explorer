@@ -1,0 +1,37 @@
+# Builds the same Docker image the Hugging Face Space builds, starts the app
+# in it, and exercises it, so that a version can be verified before it is
+# merged into main (which deploys it to the public Space). Runs on every
+# push to a branch other than main, and on demand from the Actions tab.
+name: container check
+
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore:
+      - main
+
+jobs:
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build -t sod-explorer .
+      - name: Start the app and wait for it to answer
+        run: |
+          docker run -d --name app -p 7860:7860 sod-explorer
+          for attempt in $(seq 1 30); do
+            curl -fsS -o /dev/null http://localhost:7860/ && break
+            sleep 2
+          done
+          curl -fsS -o /dev/null -w "Home page: HTTP %{http_code}\n" http://localhost:7860/
+          curl -fsS -o /dev/null -w "Layout:    HTTP %{http_code}\n" http://localhost:7860/_dash-layout
+          curl -fsS -o /dev/null -w "Callbacks: HTTP %{http_code}\n" http://localhost:7860/_dash-dependencies
+      - name: Test suite inside the container
+        run: docker exec app sh -c "pip install -q pytest && python -m pytest -q -p no:cacheprovider"
+      - name: Live requests from inside the container
+        if: always()
+        run: docker exec app python -m sod_explorer.sources.check_live
+      - name: Application log
+        if: always()
+        run: docker logs app 2>&1 | tail -40
