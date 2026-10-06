@@ -11,7 +11,8 @@ each source and prints whether it succeeded:
 
 * LORE: moisture and density for Expedition 362, Hole U1480E.
 * PANGAEA: a dataset search for Expedition 343 (Chikyu), and a download of
-  the first dataset found.
+  the first dataset found that is not access-restricted (datasets under
+  moratorium require a PANGAEA login and are skipped).
 * DSDP Data Access application: density and porosity for Leg 29, Site 277
   (requires Chromium and chromedriver; see
   :mod:`sod_explorer.sources.shinylaurel`).
@@ -25,6 +26,7 @@ import time
 import traceback
 
 from . import lore, pangaea, shinylaurel
+from .common import SourceError
 
 
 def _lore() -> str:
@@ -33,12 +35,22 @@ def _lore() -> str:
 
 
 def _pangaea() -> str:
-    results = pangaea.search('"Expedition 343" Chikyu', count=5)
+    results = pangaea.search('"Expedition 343" Chikyu', count=8)
     if not results:
         return "search returned no datasets (service reachable)"
-    df, source = pangaea.fetch_dataset(results[0]["value"])
-    return (f"{len(results)} datasets found; downloaded {results[0]['value']} "
-            f"({len(df)} rows); citation present: {bool(source.get('citation'))}")
+    restricted = []
+    for result in results:
+        try:
+            df, source = pangaea.fetch_dataset(result["value"])
+        except SourceError as exc:
+            if "access-restricted" not in str(exc):
+                raise
+            restricted.append(result["value"])
+            continue
+        return (f"{len(results)} datasets found; downloaded {result['value']} ({len(df)} rows); "
+                f"citation present: {bool(source.get('citation'))}; "
+                f"access-restricted and skipped: {restricted or 'none'}")
+    return f"{len(results)} datasets found, all access-restricted: {restricted}"
 
 
 def _dsdp() -> str:
