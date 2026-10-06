@@ -1,3 +1,14 @@
+---
+title: SOD Explorer
+colorFrom: blue
+colorTo: green
+sdk: docker
+app_port: 7860
+pinned: false
+license: mit
+short_description: Scientific ocean drilling data visualization tool
+---
+ 
  SOD Explorer
 
 SOD (Scientific Ocean Drilling) Explorer is a web application and Python
