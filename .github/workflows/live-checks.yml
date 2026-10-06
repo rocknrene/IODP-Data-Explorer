@@ -1,6 +1,9 @@
 # Makes real requests to LORE, PANGAEA, and the DSDP Data Access application
 # and prints which succeed. Runs on every push to a branch other than main,
 # and on demand from the Actions tab ("Run workflow").
+#
+# The output is also written to the run summary and pushed to the branch
+# results-live-checks, so the results can be read without opening the logs.
 name: live checks
 
 on:
@@ -8,6 +11,10 @@ on:
   push:
     branches-ignore:
       - main
+      - "results-*"
+
+permissions:
+  contents: write
 
 jobs:
   live:
@@ -22,11 +29,28 @@ jobs:
         run: pip install -r requirements.txt
       - name: LORE report names
         if: always()
-        run: python -m sod_explorer.sources.check_lore
+        run: |
+          set -o pipefail
+          python -m sod_explorer.sources.check_lore 2>&1 | tee lore_names.txt
       - name: Live requests to each source
         if: always()
         env:
           CHROME_BIN: /usr/bin/google-chrome
         run: |
+          set -o pipefail
           export CHROMEDRIVER_PATH="${CHROMEWEBDRIVER}/chromedriver"
-          python -m sod_explorer.sources.check_live
+          python -m sod_explorer.sources.check_live 2>&1 | tee live_requests.txt
+      - name: Publish results
+        if: always()
+        run: |
+          {
+            echo "## LORE report names"; echo '```'; cat lore_names.txt 2>/dev/null; echo '```'
+            echo "## Live requests"; echo '```'; cat live_requests.txt 2>/dev/null; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          mkdir published && cp lore_names.txt live_requests.txt published/ 2>/dev/null || true
+          echo "commit ${GITHUB_SHA} run ${GITHUB_RUN_ID} $(date -u +%FT%TZ)" > published/RUN.txt
+          cd published
+          git init -q -b results-live-checks
+          git add .
+          git -c user.name="GitHub Action" -c user.email="action@github.com" commit -qm "live checks results"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" results-live-checks

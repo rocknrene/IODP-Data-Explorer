@@ -2,6 +2,9 @@
 # in it, and exercises it, so that a version can be verified before it is
 # merged into main (which deploys it to the public Space). Runs on every
 # push to a branch other than main, and on demand from the Actions tab.
+#
+# The output is also written to the run summary and pushed to the branch
+# results-container-check, so the results can be read without opening the logs.
 name: container check
 
 on:
@@ -9,6 +12,10 @@ on:
   push:
     branches-ignore:
       - main
+      - "results-*"
+
+permissions:
+  contents: write
 
 jobs:
   container:
@@ -24,14 +31,35 @@ jobs:
             curl -fsS -o /dev/null http://localhost:7860/ && break
             sleep 2
           done
-          curl -fsS -o /dev/null -w "Home page: HTTP %{http_code}\n" http://localhost:7860/
-          curl -fsS -o /dev/null -w "Layout:    HTTP %{http_code}\n" http://localhost:7860/_dash-layout
-          curl -fsS -o /dev/null -w "Callbacks: HTTP %{http_code}\n" http://localhost:7860/_dash-dependencies
+          {
+            curl -fsS -o /dev/null -w "Home page: HTTP %{http_code}\n" http://localhost:7860/
+            curl -fsS -o /dev/null -w "Layout:    HTTP %{http_code}\n" http://localhost:7860/_dash-layout
+            curl -fsS -o /dev/null -w "Callbacks: HTTP %{http_code}\n" http://localhost:7860/_dash-dependencies
+          } | tee app_pages.txt
       - name: Test suite inside the container
-        run: docker exec app sh -c "pip install -q pytest && python -m pytest -q -p no:cacheprovider"
+        run: |
+          set -o pipefail
+          docker exec app sh -c "pip install -q pytest && python -m pytest -q -p no:cacheprovider" 2>&1 | tee container_tests.txt
       - name: Live requests from inside the container
         if: always()
-        run: docker exec app python -m sod_explorer.sources.check_live
+        run: |
+          set -o pipefail
+          docker exec app python -m sod_explorer.sources.check_live 2>&1 | tee container_live.txt
       - name: Application log
         if: always()
-        run: docker logs app 2>&1 | tail -40
+        run: docker logs app 2>&1 | tail -40 | tee app_log.txt
+      - name: Publish results
+        if: always()
+        run: |
+          {
+            for f in app_pages container_tests container_live app_log; do
+              echo "## ${f}"; echo '```'; tail -60 "${f}.txt" 2>/dev/null; echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+          mkdir published && cp app_pages.txt container_tests.txt container_live.txt app_log.txt published/ 2>/dev/null || true
+          echo "commit ${GITHUB_SHA} run ${GITHUB_RUN_ID} $(date -u +%FT%TZ)" > published/RUN.txt
+          cd published
+          git init -q -b results-container-check
+          git add .
+          git -c user.name="GitHub Action" -c user.email="action@github.com" commit -qm "container check results"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" results-container-check
