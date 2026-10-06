@@ -219,6 +219,135 @@ def assemble_carbonates(raw: pd.DataFrame) -> pd.DataFrame:
     return table[order].sort_values(sort_by, kind="stable").reset_index(drop=True)
 
 
+def _header_text(parts, row: pd.Series | None = None) -> str:
+    """Column name from a definition header: literal text, and row values where a column is referenced."""
+    if isinstance(parts, dict):
+        parts = [parts]
+    pieces = []
+    for part in parts or []:
+        if "text" in part:
+            pieces.append(str(part["text"]))
+        elif "col" in part and row is not None:
+            value = row.iloc[int(part["col"])]
+            pieces.append("" if pd.isna(value) else str(value).strip())
+    text = unescape(" ".join(pieces).replace("</br>", " ").replace("<br>", " "))
+    return " ".join(text.replace("\u00c2\u00b5", "\u00b5").split())
+
+
+def assemble_composite(raw: pd.DataFrame, definition: dict) -> pd.DataFrame:
+    """Assemble a composite LORE report from its internal report and report definition.
+
+    LORE builds some reports (Interstitial Water, Gas Elements) in the
+    browser. The internal report holds one row per result; the report
+    definition (``/reference/ReportDefinitionGet-LORE``) states, by column
+    position, which column names the analysis, which columns identify an
+    output row, which columns are copied, and how results become columns:
+
+    * a ``fixedvalue`` template gives a named output column for a result
+      column of one analysis (for example, alkalinity from ALKALINITY);
+    * a ``match`` template gives one output column for each distinct value
+      of the matched columns (for example, one column per element and
+      wavelength measured by ICP-AES), named from those values.
+
+    This function applies the definition. Rows are grouped by Expedition,
+    Site, Hole, and the definition's row-separator columns. Where a group
+    holds several values for the same output column (replicates), they are
+    placed on successive rows and a ``Replicate`` column is added. Values
+    are not rounded. If the definition cannot be applied to the table, the
+    table is returned unchanged.
+    """
+    try:
+        fmt = definition["formatdefinition"]["columns"]
+        analysis_col = int(definition["analysiscol"])
+        separators = definition["rowseperatorcol"]
+        separators = [int(c) for c in (separators if isinstance(separators, list) else [separators])]
+        width = raw.shape[1]
+        plain = [(int(c["col"]), c.get("header", {})) for c in fmt if "col" in c and "template" not in c]
+        templates = [t for c in fmt for t in c.get("template", [])]
+        positions = [analysis_col, *separators, *(i for i, _ in plain)]
+        if not templates or max(positions) >= width:
+            return raw
+    except (KeyError, TypeError, ValueError):
+        return raw
+
+    names = list(raw.columns)
+    location = [i for i, n in enumerate(names) if n in ("Exp", "Site", "Hole")]
+    key_positions = list(dict.fromkeys(location + separators))
+    blank = "\x00"
+    keys = raw.iloc[:, key_positions].astype(object)
+    keys = keys.where(keys.notna(), blank)
+    key = pd.Series(list(map(tuple, keys.to_numpy())), index=raw.index)
+    analysis = raw.iloc[:, analysis_col].astype(str).str.strip().str.upper()
+
+    records, order = [], []
+    for template in templates:
+        rows = raw[analysis == str(template.get("analysis", "")).upper()]
+        if rows.empty:
+            continue
+        if "fixedvalue" in template:
+            specs = [(int(f["source"]), None, f.get("header")) for f in template["fixedvalue"]]
+        elif "source" in template:
+            specs = [(int(template["source"]), template.get("header"), None)]
+        else:
+            continue   # computed columns are not used by the reports assembled here
+        for source, per_row_header, fixed_header in specs:
+            if source >= width:
+                continue
+            values = rows.iloc[:, source]
+            present = values.notna() & values.astype(str).str.strip().ne("")
+            for index in rows.index[present]:
+                name = (_header_text(fixed_header) if fixed_header is not None
+                        else _header_text(per_row_header, raw.loc[index]))
+                if name:
+                    records.append((key[index], name, values[index]))
+                    if name not in order:
+                        order.append(name)
+    if not records:
+        return raw
+
+    long = pd.DataFrame(records, columns=["key", "column", "value"])
+    long["Replicate"] = long.groupby(["key", "column"], sort=False).cumcount() + 1
+    wide = long.pivot(index=["key", "Replicate"], columns="column", values="value")[order].reset_index()
+
+    first = raw.groupby(key, sort=False).head(1)
+    first_key = key[first.index]
+    copied = {}
+    for position, header in plain:
+        name = _header_text(header) if "text" in header else names[position]
+        copied[name.strip() or names[position]] = first.iloc[:, position].to_numpy()
+    identifiers = pd.DataFrame(copied)
+    identifiers.insert(0, "key", first_key.to_numpy())
+    table = identifiers.merge(wide, on="key", how="inner").drop(columns="key")
+
+    leading = [c for c in identifiers.columns if c != "key"]
+    trailing = [c for c in leading if "comment" in c.lower() or c in ("Text ID", "Test No.")]
+    leading = [c for c in leading if c not in trailing]
+    replicate = ["Replicate"] if table["Replicate"].max() > 1 else []
+    table = table[leading + replicate + order + trailing]
+    for column in order + leading:
+        converted = pd.to_numeric(table[column], errors="coerce")
+        if converted.notna().sum() == table[column].notna().sum():
+            table[column] = converted
+    depth = next((c for c in leading if "depth" in c.lower()), None)
+    sort_by = [c for c in ("Site", "Hole") if c in table.columns] + ([depth] if depth else [])
+    return table.sort_values(sort_by + replicate, kind="stable").reset_index(drop=True)
+
+
+@lru_cache(maxsize=8)
+def report_definition(name: str) -> dict | None:
+    """LORE's definition of a composite report, or ``None`` if it cannot be read."""
+    try:
+        response = requests.get(f"{LORE_HOST}/reference/ReportDefinitionGet-LORE", params={"name": name},
+                                headers=_HEADERS, timeout=TIMEOUT_S)
+        response.raise_for_status()
+        definition = response.json()
+        if isinstance(definition, dict) and isinstance(definition.get("definition"), str):
+            definition = json.loads(definition["definition"])   # sent as a JSON string inside JSON
+    except (requests.RequestException, ValueError):
+        return None
+    return definition if isinstance(definition, dict) and "formatdefinition" in definition else None
+
+
 @lru_cache(maxsize=CACHE_SIZE)
 def _fetch_cached(report: LoreReport, expedition: str, site: str, hole: str) -> tuple[pd.DataFrame, str]:
     """Retrieve one LIMS report from LORE. Raises :class:`SourceError` on failure.
@@ -272,6 +401,10 @@ def _fetch_cached(report: LoreReport, expedition: str, site: str, hole: str) -> 
         raise SourceError(f"LORE returned {report.code} rows, but none for {where}")
     if report.transform == "carbonates":
         df = assemble_carbonates(df)
+    elif report.transform and report.transform.startswith("definition:"):
+        definition = report_definition(report.transform.split(":", 1)[1])
+        if definition is not None:
+            df = assemble_composite(df, definition)
     return df, name
 
 
