@@ -31,10 +31,10 @@ the lower-case LIMS analysis code (exceptions: downhole temperature is
 
 LORE assembles three reports in the browser from an *internal* report and
 a report definition: Carbonates, Interstitial Water, and Gas Elements.
-Carbonates is assembled by this software from ``carbonates_internal``
-(:func:`sod_explorer.sources.lore.assemble_carbonates`). Interstitial
-Water and Gas Elements are not yet assembled, and their entries below
-remain unresolved candidates. Run ``python -m
+Each is assembled by this software from its internal report:
+Carbonates by :func:`sod_explorer.sources.lore.assemble_carbonates`, and
+Interstitial Water and Gas Elements by applying LORE's own report
+definition (:func:`sod_explorer.sources.lore.assemble_composite`). Run ``python -m
 sod_explorer.sources.check_lore`` to list which names resolve.
 """
 
@@ -47,6 +47,7 @@ VERIFIED_LORE_NAMES = frozenset({
     "gra", "mad", "pwl", "ngr", "tcon", "avs",          # verified in the original application
     "dhtemp", "pwc", "pwb", "rsc", "rgb", "tor",        # verified 2026-10-06 (live checks workflow)
     "penetrate", "sranl", "carbonates_internal",        # read from LORE's menu service, 2026-10-06
+    "iw_internal", "gaselements_internal",
 })
 
 
@@ -103,11 +104,11 @@ REPORT_TYPES: tuple[ReportType, ...] = (
                pangaea_term="carbonate", ncei_codes=("carb",)),
     ReportType("gas_elements", "Gas elements", "Geochemistry",
                odp_report="Gas Elements (GAS)",
-               lore_reports=(LoreReport("GE", ("ge", "gaselements", "gas")),),
+               lore_reports=(LoreReport("GE", ("gaselements_internal",), transform="definition:gaselements"),),
                pangaea_term="headspace gas", ncei_codes=("gas",)),
     ReportType("interstitial_water", "Interstitial water", "Geochemistry",
                dsdp_category="interstitial water", odp_report="Interstitial Water (IW)",
-               lore_reports=(LoreReport("IW", ("iw", "iwreport", "interstitialwater")),),
+               lore_reports=(LoreReport("IW", ("iw_internal",), transform="definition:iw"),),
                pangaea_term="interstitial water", ncei_codes=("iw",)),
     ReportType("source_rock", "Source rock analysis", "Geochemistry",
                dsdp_pangaea_term="Rock-Eval pyrolysis", odp_report="Rock Eval (RE/REVAL)",
