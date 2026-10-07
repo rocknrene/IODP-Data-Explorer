@@ -1,0 +1,23 @@
+== 1. One Hole
+PASS  DSDP one Hole ('29', '277', '*') (12 s): DSDP density and porosity, Leg 29 (34 rows); 0.00 MB in the browser; 34 rows; depth column 'sample depth (m)'; 4 measurement columns
+PASS  ODP one Hole ('204', '1244', 'C') (1 s): NCEI Moisture and density, Leg 204 (219 rows); 0.07 MB in the browser; 219 rows; depth column 'Depth (mbsf)'; 28 measurement columns
+PASS  IODP one Hole ('362', 'U1480', 'E') (17 s): LORE Moisture and density, Expedition 362 (141 rows); 0.04 MB in the browser; 141 rows; depth column 'Depth CSF-A (m)'; 18 measurement columns
+
+== 2. Entire Leg or Expedition
+PASS  DSDP entire Leg/Expedition 29 (3 s): DSDP density and porosity, Leg 29 (198 rows); 0.02 MB in the browser; 198 rows; depth column 'sample depth (m)'; 4 measurement columns
+PASS  ODP entire Leg/Expedition 204 (20 s): NCEI Moisture and density, Leg 204 (1,399 rows); 0.44 MB in the browser; 1399 rows; depth column 'Depth (mbsf)'; 28 measurement columns
+PASS  IODP entire Leg/Expedition 362 (145 s): LORE Moisture and density, Expedition 362 (1,117 rows); 0.32 MB in the browser; 1117 rows; depth column 'Depth CSF-A (m)'; 18 measurement columns
+
+== 3. Merges
+PASS  merge DSDP with DSDP (5 s): mad with pwave_split: 12 of 34 A samples paired (depths 'sample depth (m)' and 'sample depth (m)'; scales None and None; grouping hole)
+PASS  merge ODP with ODP (1 s): mad with carbonates: 43 of 219 A samples paired (depths 'Depth (mbsf)' and 'Depth (mbsf)'; scales mbsf and mbsf; grouping hole)
+PASS  merge IODP with IODP (18 s): mad with carbonates: 48 of 141 A samples paired (depths 'Depth CSF-A (m)' and 'Depth CSF-A (m)'; scales CSF-A and CSF-A; grouping hole)
+PASS  merge DSDP with IODP (0 s): mad with mad: 14 of 34 A samples paired (depths 'sample depth (m)' and 'Depth CSF-A (m)'; scales None and CSF-A; grouping none)
+PASS  merge ODP with IODP (0 s): mad with mad: 73 of 219 A samples paired (depths 'Depth (mbsf)' and 'Depth CSF-A (m)'; scales mbsf and CSF-A; grouping none)
+PASS  merge DSDP with ODP (0 s): mad with mad: 24 of 34 A samples paired (depths 'sample depth (m)' and 'Depth (mbsf)'; scales None and mbsf; grouping none)
+
+== 4. Charts
+PASS  depth tracks and cross-plot, single dataset (0 s): tracks: 2 traces; cross-plot: 2 traces; title 'r = 0.983, r² = 0.966, n = 141, n_eff = 18.0<br>p = 3.6e-13, 95% CI [0.95, 0.99]<br><sup>p and CI use n_eff adjusted for lag-1 autocorrelation<br>(Bretherton et al., 1999)</sup>'
+PASS  depth tracks and cross-plot, merged dataset (0 s): depth 'merge depth CSF-A (m)'; 'Moisture dry (wt%)_A' against 'Replicate_B'; tracks: 2 traces; cross-plot title 'Detrended residuals: r = 0.064, r² = 0.004, n = 48, n_eff = 48.0<br>p = 0.66, 95% CI [-0.22, 0.34]<br><sup>p and CI use n_eff adjusted for lag-1 autocorrelation<br>(Bretherton et al., 1999)</sup>'
+
+0 of 14 check(s) failed.

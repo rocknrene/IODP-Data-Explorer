@@ -1,0 +1,49 @@
+== 5. Every report type, one Hole of each program (informative)
+none  DSDP Downhole temperature (0 s): RuntimeError: Downhole temperature has no DSDP equivalent: the data-type table lists no DSDP data type for it.
+PASS  DSDP Carbonates (6 s): DSDP carbonate and carbon, Leg 29 (28 rows); 0.00 MB in the browser; 28 rows; depth column 'sample depth (m)'; 3 measurement columns
+none  DSDP Gas elements (0 s): RuntimeError: Gas elements has no DSDP equivalent: the data-type table lists no DSDP data type for it.
+PASS  DSDP Interstitial water (3 s): DSDP interstitial water, Leg 29 (17 rows); 0.00 MB in the browser; 17 rows; depth column 'depth to sample (m)'; 6 measurement columns
+none  DSDP Source rock analysis (6 s): RuntimeError: 10 PANGAEA datasets match Leg 29 (DSDP). Select one:
+none  DSDP Compressional strength (penetrometer) (5 s): RuntimeError: 10 PANGAEA datasets match Leg 29 (DSDP). Select one:
+PASS  DSDP Gamma ray attenuation bulk density (4 s): DSDP gamma ray attenuation, Leg 29 (78 rows); 0.07 MB in the browser; 78 rows; depth column 'center of first density depth (m)'; 153 measurement columns
+PASS  DSDP Moisture and density (3 s): DSDP density and porosity, Leg 29 (34 rows); 0.00 MB in the browser; 34 rows; depth column 'sample depth (m)'; 4 measurement columns
+none  DSDP Natural gamma radiation (0 s): RuntimeError: Natural gamma radiation has no DSDP equivalent: the data-type table lists no DSDP data type for it.
+PASS  DSDP P-wave velocity (split-core) (3 s): DSDP sonic velocity, Leg 29 (124 rows); 0.01 MB in the browser; 124 rows; depth column 'sample depth (m)'; 1 measurement columns
+PASS  DSDP P-wave velocity (logger) (3 s): DSDP sonic velocity, Leg 29 (124 rows); 0.01 MB in the browser; 124 rows; depth column 'sample depth (m)'; 1 measurement columns
+none  DSDP Color reflectance (0 s): RuntimeError: Color reflectance has no DSDP equivalent: the data-type table lists no DSDP data type for it.
+none  DSDP RGB (0 s): RuntimeError: RGB has no DSDP equivalent: the data-type table lists no DSDP data type for it.
+none  DSDP Shear strength (vane) (3 s): RuntimeError: No vane shear data returned for DSDP Leg 29
+none  DSDP Shear strength (torvane) (3 s): RuntimeError: No vane shear data returned for DSDP Leg 29
+none  DSDP Thermal conductivity (5 s): RuntimeError: No PANGAEA dataset matching Thermal conductivity was found for Leg 29 (DSDP).
+none  ODP Downhole temperature (2 s): RuntimeError: The NCEI archive has no Downhole temperature file for Leg 204, 1244C. LORE (fallback): LORE has no APCT-3/SET data for Exp 204 1244C. ODP Leg 204 predates the LIMS database served by LORE. Check the Site and Hole, or use Local file upload.
+PASS  ODP Carbonates (0 s): NCEI Carbonates, Leg 204 (43 rows); 0.00 MB in the browser; 43 rows; depth column 'Depth (mbsf)'; 8 measurement columns
+PASS  ODP Gas elements (0 s): NCEI Gas elements, Leg 204 (48 rows); 0.01 MB in the browser; 48 rows; depth column 'Depth (mbsf)'; 9 measurement columns
+none  ODP Interstitial water (2 s): RuntimeError: The NCEI files hold no Interstitial water rows for Leg 204, 1244C. LORE (fallback): LORE has no IW data for Exp 204 1244C. ODP Leg 204 predates the LIMS database served by LORE. Check the Site and Hole, or use Local file upload.
+PASS  ODP Source rock analysis (0 s): NCEI Source rock analysis, Leg 204 (14 rows); 0.00 MB in the browser; 14 rows; depth column 'Depth (mbsf)'; 8 measurement columns
+none  ODP Compressional strength (penetrometer) (2 s): RuntimeError: The NCEI archive has no Compressional strength (penetrometer) file for Leg 204, 1244C. LORE (fallback): LORE has no PEN data for Exp 204 1244C. ODP Leg 204 predates the LIMS database served by LORE. Check the Site and Hole, or use Local file upload.
+PASS  ODP Gamma ray attenuation bulk density (1 s): NCEI Gamma ray attenuation bulk density, Leg 204 (9,617 rows); 1.56 MB in the browser; 9617 rows; depth column 'Depth (mbsf)'; 10 measurement columns
+PASS  ODP Moisture and density (1 s): NCEI Moisture and density, Leg 204 (219 rows); 0.07 MB in the browser; 219 rows; depth column 'Depth (mbsf)'; 28 measurement columns
+none  ODP Natural gamma radiation (2 s): RuntimeError: The NCEI archive has no Natural gamma radiation file for Leg 204, 1244C. LORE (fallback): LORE has no NGR data for Exp 204 1244C. ODP Leg 204 predates the LIMS database served by LORE. Check the Site and Hole, or use Local file upload.
+PASS  ODP P-wave velocity (split-core) (1 s): NCEI P-wave velocity (split-core), Leg 204 (6 rows); 0.00 MB in the browser; 6 rows; depth column 'Depth (mbsf)'; 15 measurement columns
+none  ODP P-wave velocity (logger) (2 s): RuntimeError: The NCEI archive has no P-wave velocity (logger) file for Leg 204, 1244C. LORE (fallback): LORE has no PWL data for Exp 204 1244C. ODP Leg 204 predates the LIMS database served by LORE. Check the Site and Hole, or use Local file upload.
+PASS  ODP Color reflectance (1 s): NCEI Color reflectance, Leg 204 (11,016 rows); 4.97 MB in the browser; 11016 rows; depth column 'Depth (mbsf)'; 45 measurement columns
+none  ODP RGB (1 s): RuntimeError: RGB was not measured during ODP (the NCEI archive has no such data type). LORE (fallback): LORE has no RGB data for Exp 204 1244C. ODP Leg 204 predates the LIMS database served by LORE. Check the Site and Hole, or use Local file upload.
+none  ODP Shear strength (vane) (2 s): RuntimeError: The NCEI archive has no Shear strength (vane) file for Leg 204, 1244C. LORE (fallback): LORE has no AVS data for Exp 204 1244C. ODP Leg 204 predates the LIMS database served by LORE. Check the Site and Hole, or use Local file upload.
+PASS  ODP Shear strength (torvane) (0 s): NCEI Shear strength (torvane), Leg 204 (17 rows); 0.00 MB in the browser; 17 rows; depth column 'Depth (mbsf)'; 3 measurement columns
+PASS  ODP Thermal conductivity (0 s): NCEI Thermal conductivity, Leg 204 (44 rows); 0.00 MB in the browser; 44 rows; depth column 'Depth (mbsf)'; 5 measurement columns
+PASS  IODP Downhole temperature (3 s): LORE Downhole temperature, Expedition 362 (5 rows); 0.00 MB in the browser; 5 rows; depth column 'Measurement Depth (MBSF)'; 6 measurement columns
+PASS  IODP Carbonates (20 s): LORE Carbonates, Expedition 362 (206 rows); 0.03 MB in the browser; 206 rows; depth column 'Depth CSF-A (m)'; 8 measurement columns
+PASS  IODP Gas elements (3 s): LORE Gas elements, Expedition 362 (12 rows); 0.00 MB in the browser; 12 rows; depth column 'Top depth CSF-A (m)'; 5 measurement columns
+PASS  IODP Interstitial water (16 s): LORE Interstitial water, Expedition 362 (29 rows); 0.01 MB in the browser; 29 rows; depth column 'Top depth CSF-A (m)'; 26 measurement columns
+none  IODP Source rock analysis (1 s): RuntimeError: LORE has no SRA data for Exp 362 U1480E
+PASS  IODP Compressional strength (penetrometer) (6 s): LORE Compressional strength (penetrometer), Expedition 362 (62 rows); 0.01 MB in the browser; 62 rows; depth column 'Depth CSF-A (m)'; 1 measurement columns
+PASS  IODP Gamma ray attenuation bulk density (18 s): LORE Gamma ray attenuation bulk density, Expedition 362 (3,697 rows); 0.63 MB in the browser; 3697 rows; depth column 'Depth CSF-A (m)'; 1 measurement columns
+PASS  IODP Moisture and density (17 s): LORE Moisture and density, Expedition 362 (141 rows); 0.04 MB in the browser; 141 rows; depth column 'Depth CSF-A (m)'; 18 measurement columns
+PASS  IODP Natural gamma radiation (14 s): LORE Natural gamma radiation, Expedition 362 (974 rows); 0.16 MB in the browser; 974 rows; depth column 'Depth CSF-A (m)'; 3 measurement columns
+PASS  IODP P-wave velocity (split-core) (21 s): LORE P-wave velocity (split-core), Expedition 362 (212 rows); 0.05 MB in the browser; 212 rows; depth column 'Depth CSF-A (m)'; 5 measurement columns
+PASS  IODP P-wave velocity (logger) (23 s): LORE P-wave velocity (logger), Expedition 362 (3,608 rows); 0.65 MB in the browser; 3608 rows; depth column 'Depth CSF-A (m)'; 3 measurement columns
+PASS  IODP Color reflectance (22 s): LORE Color reflectance, Expedition 362 (3,421 rows); 0.76 MB in the browser; 3421 rows; depth column 'Depth CSF-A (m)'; 8 measurement columns
+PASS  IODP RGB (25 s): LORE RGB, Expedition 362 (10,073 rows); 2.15 MB in the browser; 10073 rows; depth column 'Depth CSF-A (m)'; 3 measurement columns
+PASS  IODP Shear strength (vane) (6 s): LORE Shear strength (vane), Expedition 362 (63 rows); 0.01 MB in the browser; 63 rows; depth column 'Depth CSF-A (m)'; 3 measurement columns
+PASS  IODP Shear strength (torvane) (2 s): LORE Shear strength (torvane), Expedition 362 (1 rows); 0.00 MB in the browser; 1 rows; depth column 'Depth CSF-A (m)'; 2 measurement columns
+PASS  IODP Thermal conductivity (5 s): LORE Thermal conductivity, Expedition 362 (42 rows); 0.01 MB in the browser; 42 rows; depth column 'Depth CSF-A (m)'; 4 measurement columns
