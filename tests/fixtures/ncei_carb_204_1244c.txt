@@ -1,0 +1,4 @@
+Leg	Site	Hole	Core	Type	Section	Top (cm)	Bottom (cm)	Depth (mbsf)	Inorganic_Carbon (wt %)	Calcium_Carbonate (wt %)	Total_Carbon (wt %)	Organic_Carbon (wt %)	Nitrogen (wt %)	Sulfur (wt %)	Hydrogen (mg HC/g) 
+204	1244	C	1	H	3	29	30	3.29	0.51	4.25	1.825	1.32	0.14	1.08	
+204	1244	C	2	H	4	35	36	10.35	0.52	4.33	1.58	1.06	0.13	0.6	
+204	1244	C	20	X	3	73	74	152.93	0.28	2.33

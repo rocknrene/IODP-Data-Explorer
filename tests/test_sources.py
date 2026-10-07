@@ -91,7 +91,7 @@ class TestLore:
             return {"headers": []}
 
         monkeypatch.setattr(lore, "_get_json", header_service)
-        report = catalog.REPORTS["gas_elements"].lore_reports[0]
+        report = catalog.LoreReport("GE", ("ge", "gaselements", "gas"))
         name, headers = lore.resolve_report_name(None, report)
         assert name == "gaselements" and asked == ["ge", "gaselements"]
         assert headers == ["Exp", "Methane (ppmv)"]
@@ -174,6 +174,18 @@ class TestPangaea:
         assert source["doi"] == "10.1594/PANGAEA.123456"
         assert source["license"].endswith("(CC-BY-3.0)") and source["citation"]
 
+    def test_restricted_dataset_is_explained(self, monkeypatch):
+        """Datasets under moratorium answer HTTP 401; the message says so."""
+        import requests
+
+        class Restricted(FakeResponse):
+            def raise_for_status(self):
+                raise requests.HTTPError("401", response=self)
+
+        monkeypatch.setattr(pangaea.requests, "get", lambda *a, **k: Restricted(status=401))
+        with pytest.raises(SourceError, match="access-restricted"):
+            pangaea.fetch_dataset("997314")
+
     def test_fetch_dataset_rejects_bad_identifier(self):
         with pytest.raises(SourceError):
             pangaea.fetch_dataset("../etc")
@@ -235,12 +247,25 @@ class TestRouting:
         outcome = routing.fetch("mad", "362")
         assert outcome.df is frame and "LORE" in outcome.message
 
-    def test_pre_lims_leg_explains_archive(self, monkeypatch):
-        def fail(*args):
+    def test_odp_leg_uses_ncei(self, monkeypatch):
+        frame = pd.DataFrame({"x": [1]})
+        monkeypatch.setattr(routing.ncei, "fetch", lambda *a: (frame, {"type": "ncei"}))
+        monkeypatch.setattr(routing.lore, "fetch", lambda *a: pytest.fail("LORE must not be queried"))
+        outcome = routing.fetch("mad", "204", "1244", "C")
+        assert outcome.df is frame and outcome.message.startswith("NCEI")
+
+    def test_odp_leg_falls_back_to_lore_then_explains(self, monkeypatch):
+        def no_ncei(*args):
+            raise SourceError("The NCEI archive has no file")
+        def no_lore(*args):
             raise SourceError("LORE has no MAD data for Exp 150")
-        monkeypatch.setattr(routing.lore, "fetch", fail)
+        monkeypatch.setattr(routing.ncei, "fetch", no_ncei)
+        monkeypatch.setattr(routing.lore, "fetch", no_lore)
         outcome = routing.fetch("mad", "150")
-        assert outcome.df is None and "predates the LIMS" in outcome.message
+        assert outcome.df is None and "NCEI" in outcome.message and "predates the LIMS" in outcome.message
+        frame = pd.DataFrame({"x": [1]})
+        monkeypatch.setattr(routing.lore, "fetch", lambda *a: (frame, {"type": "lore"}))
+        assert routing.fetch("mad", "150").df is frame
 
     def test_unlettered_hole_not_sent_to_lore(self, monkeypatch):
         seen = {}
@@ -292,3 +317,151 @@ def test_user_agent_identifies_software():
     assert "SOD-Explorer" in common.USER_AGENT
     assert "Mozilla" not in common.USER_AGENT
 
+
+
+class TestNcei:
+    @pytest.fixture(autouse=True)
+    def _no_pause(self, monkeypatch):
+        from sod_explorer.sources import ncei
+        monkeypatch.setattr(ncei, "PAUSE_S", 0)
+        ncei._fetch_file.cache_clear()
+
+    def _serve(self, monkeypatch, files):
+        """Replace HTTP with a dict of URL -> text; other URLs answer 404."""
+        from types import SimpleNamespace
+
+        from sod_explorer.sources import ncei
+        requested = []
+        def get(url, **kwargs):
+            requested.append(url)
+            if url in files:
+                return SimpleNamespace(status_code=200, text=files[url], encoding="utf-8")
+            return SimpleNamespace(status_code=404, text="<html>Not Found</html>", encoding="utf-8")
+        monkeypatch.setattr(ncei.requests, "get", get)
+        return requested
+
+    def test_file_url(self):
+        from sod_explorer.sources import ncei
+        assert ncei.file_url("carb", "204", "1244", "C").endswith("/204/1244c/carb_204_1244c.txt")
+
+    def test_parse_carbonate_file(self, fixture_bytes):
+        from sod_explorer.columns import depth_scale, find_depth_column
+        from sod_explorer.sources import ncei
+        df = ncei.parse_data_file(fixture_bytes("ncei_carb_204_1244c.txt").decode())
+        assert len(df) == 3 and df.columns[-1] == "Hydrogen (mg HC/g)"
+        assert df["Hole"].tolist() == ["C"] * 3 and df["Site"].tolist() == ["1244"] * 3
+        assert pd.isna(df.loc[2, "Total_Carbon (wt %)"]) and df.loc[0, "Calcium_Carbonate (wt %)"] == 4.25
+        depth = find_depth_column(df)
+        assert depth == "Depth (mbsf)" and depth_scale(depth) == "mbsf"
+
+    def test_html_is_not_a_data_file(self):
+        from sod_explorer.sources import ncei
+        with pytest.raises(SourceError):
+            ncei.parse_data_file("<html><body>Not Found</body></html>")
+
+    def test_fetch_one_hole(self, monkeypatch, fixture_bytes):
+        from sod_explorer.sources import ncei
+        url = ncei.file_url("mad", "204", "1244", "C")
+        requested = self._serve(monkeypatch, {url: fixture_bytes("ncei_mad_204_1244c.txt").decode()})
+        df, source = ncei.fetch("mad", "204", "1244", "c")
+        assert requested == [url] and len(df) == 7 and "Porosity (%)" in df.columns
+        assert source["type"] == "ncei" and source["doi"] == "10.7289/V5W37T8C"
+        assert source["query"]["files"] == [{"url": url, "rows": 7}]
+        ncei.fetch("mad", "204", "1244", "C")
+        assert requested == [url], "a repeated request must be served from the cache"
+
+    def test_fetch_site_requests_each_hole_of_reference_table(self, monkeypatch, fixture_bytes):
+        from sod_explorer.sources import ncei
+        monkeypatch.setattr(ncei, "holes_for_site", lambda leg, site: ["A", "C"])
+        url = ncei.file_url("carb", "204", "1244", "C")
+        requested = self._serve(monkeypatch, {url: fixture_bytes("ncei_carb_204_1244c.txt").decode()})
+        df, source = ncei.fetch("carbonates", "204", "1244")
+        assert len(requested) == 2 and len(df) == 3
+
+    def test_missing_file_and_unmeasured_type(self, monkeypatch):
+        from sod_explorer.sources import ncei
+        self._serve(monkeypatch, {})
+        with pytest.raises(SourceError, match="no Carbonates file"):
+            ncei.fetch("carbonates", "204", "1244", "C")
+        with pytest.raises(SourceError, match="not measured during ODP"):
+            ncei.fetch("rgb", "204", "1244", "C")
+
+
+class TestCarbonateAssembly:
+    def _raw(self):
+        base = {"Exp": 362, "Site": "U1480", "Hole": "E", "Core": 1, "Type": "H", "Sect": 1, "A/W": "W",
+                "Sample comments": None, "hydrogen_percent": None, "nitrogen_percent": None,
+                "sulfur_percent": None}
+        rows = [
+            {**base, "Text ID": "CYL1", "Depth CSF-A (m)": 1.0, "Analysis": "COUL", "carbon_percent": 0.6},
+            {**base, "Text ID": "CYL1", "Depth CSF-A (m)": 1.0, "Analysis": "CHNS", "carbon_percent": 1.5,
+             "nitrogen_percent": 0.1},
+            {**base, "Text ID": "CYL2", "Depth CSF-A (m)": 5.0, "Analysis": "COUL", "carbon_percent": 0.2},
+            {**base, "Text ID": "CYL2", "Depth CSF-A (m)": 5.0, "Analysis": "COUL", "carbon_percent": 0.4},
+            {**base, "Text ID": "CYL3", "Depth CSF-A (m)": 3.0, "Analysis": "CHNS", "carbon_percent": 2.0},
+        ]
+        return pd.DataFrame(rows)
+
+    def test_one_row_per_sample_with_computed_columns(self):
+        table = lore.assemble_carbonates(self._raw())
+        assert table["Text ID"].tolist() == ["CYL1", "CYL3", "CYL2", "CYL2"]      # sorted by depth
+        first = table.iloc[0]
+        assert first["Inorganic carbon (wt%)"] == 0.6 and first["Total carbon (wt%)"] == 1.5
+        assert first["Calcium carbonate (wt%)"] == pytest.approx(5.0, abs=0.001)
+        assert first["Organic carbon (wt%) by difference (CHNS-COUL)"] == pytest.approx(0.9)
+        assert first["Nitrogen (wt%)"] == 0.1
+        assert pd.isna(table.iloc[1]["Inorganic carbon (wt%)"]) and table.iloc[1]["Total carbon (wt%)"] == 2.0
+
+    def test_replicates_are_kept(self):
+        table = lore.assemble_carbonates(self._raw())
+        replicates = table[table["Text ID"] == "CYL2"]
+        assert replicates["Replicate"].tolist() == [1, 2]
+        assert replicates["Inorganic carbon (wt%)"].tolist() == [0.2, 0.4]
+
+    def test_unexpected_table_is_returned_unchanged(self):
+        frame = pd.DataFrame({"x": [1]})
+        assert lore.assemble_carbonates(frame) is frame
+
+
+class TestCompositeAssembly:
+    DEFINITION = {
+        "analysiscol": "9", "rowseperatorcol": ["4"],
+        "formatdefinition": {"columns": [
+            {"header": {"text": "Exp"}, "col": "1"}, {"header": {"text": "Site"}, "col": "2"},
+            {"header": {"text": "Hole"}, "col": "3"}, {"header": {"text": "Top depth CSF-A (m)"}, "col": "4"},
+            {"template": [
+                {"analysis": "ICPAES",
+                 "header": [{"col": "5"}, {"text": "</br>"}, {"col": "7"}, {"text": "nm </br>ICPAES"}],
+                 "match": ["5", "7"], "source": "6"},
+                {"analysis": "ALKALINITY", "fixedvalue": [
+                    {"source": "8", "header": [{"text": "Alkalinity (mM) ALKALINITY"}]}]},
+            ]},
+        ]},
+    }
+    COLUMNS = ["sample_number", "Exp", "Site", "Hole", "Top depth CSF-A (m)", "calibrated_name",
+               "concentration", "wavelength", "alkalinity", "Analysis"]
+
+    def _raw(self):
+        rows = [
+            [1, 362, "U1480", "E", 7.4, "Ba (uM)", 2.5, 455.4, None, "ICPAES"],
+            [2, 362, "U1480", "E", 2.9, "Ba (uM)", 1.5, 455.4, None, "ICPAES"],
+            [3, 362, "U1480", "E", 2.9, "Ca (mM)", 10.2, 315.9, None, "ICPAES"],
+            [4, 362, "U1480", "E", 2.9, None, None, None, 3.1, "ALKALINITY"],
+            [5, 362, "U1480", "E", 2.9, None, None, None, 3.3, "ALKALINITY"],
+        ]
+        return pd.DataFrame(rows, columns=self.COLUMNS)
+
+    def test_results_become_columns_one_row_per_sample(self):
+        table = lore.assemble_composite(self._raw(), self.DEFINITION)
+        assert list(table.columns) == ["Exp", "Site", "Hole", "Top depth CSF-A (m)", "Replicate",
+                                       "Ba (uM) 455.4 nm ICPAES", "Ca (mM) 315.9 nm ICPAES",
+                                       "Alkalinity (mM) ALKALINITY"]
+        assert table["Top depth CSF-A (m)"].tolist() == [2.9, 2.9, 7.4]
+        assert table["Ba (uM) 455.4 nm ICPAES"].tolist()[0] == 1.5 and table.iloc[2, 5] == 2.5
+        assert table["Alkalinity (mM) ALKALINITY"].tolist()[:2] == [3.1, 3.3]      # replicates kept
+        assert table["Replicate"].tolist() == [1, 2, 1]
+
+    def test_table_that_does_not_fit_the_definition_is_returned_unchanged(self):
+        frame = pd.DataFrame({"x": [1]})
+        assert lore.assemble_composite(frame, self.DEFINITION) is frame
+        assert lore.assemble_composite(self._raw(), {"formatdefinition": {}}).equals(self._raw())

@@ -125,6 +125,7 @@ def merge_by_depth(
     tolerance_m: float,
     allow_mixed_scales: bool = False,
     one_to_one: bool = True,
+    across_holes: bool = False,
 ) -> tuple[pd.DataFrame, MergeReport]:
     """Pair samples of two datasets by depth within a tolerance.
 
@@ -144,7 +145,11 @@ def merge_by_depth(
        composite scale (CCSF, mcd), pairs are instead restricted to the same
        Site, since a composite scale registers all holes at a site to a
        common depth. If identifiers are unavailable, rows are paired on
-       depth alone and a warning is recorded.
+       depth alone and a warning is recorded. With ``across_holes``, the
+       restriction is lifted on request: rows are paired on depth alone
+       even though they come from different Holes or Sites (for example,
+       to compare depth trends between a DSDP Site and an IODP Site), and
+       a warning states that paired samples are not from the same location.
     4. **Nearest-neighbor pairing** (:func:`pandas.merge_asof`,
        ``direction="nearest"``).
     5. **One-to-one constraint.** When ``one_to_one`` is true, a B sample
@@ -166,6 +171,8 @@ def merge_by_depth(
         Permit merging when the two depth scales differ.
     one_to_one
         Enforce that each B sample is paired with at most one A sample.
+    across_holes
+        Pair on depth alone, ignoring Site and Hole.
 
     Returns
     -------
@@ -225,12 +232,20 @@ def merge_by_depth(
     include_exp = keys_a.expedition is not None and keys_b.expedition is not None
     group_a = group_key(dfa, level, include_expedition=include_exp)
     group_b = group_key(dfb, level, include_expedition=include_exp)
-    if group_a is not None and group_b is not None:
+    if across_holes:
+        grouping = "none"
+        warnings.append(
+            "Rows were paired on depth below seafloor alone, across different Sites or Holes, "
+            "as requested. Paired samples are not from the same location; the result compares "
+            "depth trends and does not represent co-located measurements.")
+    elif group_a is not None and group_b is not None:
         grouping = level
         a["_group"] = group_a.values
         b["_group"] = group_b.values
         if not set(a["_group"].dropna()) & set(b["_group"].dropna()):
-            warnings.append(f"The two datasets share no {level}; no pairs are possible.")
+            warnings.append(f"The two datasets share no {level}; no pairs are possible. To compare "
+                            "depth trends between different Sites, select 'Pair across different "
+                            "Sites/Holes'.")
     else:
         grouping = "none"
         lacking = [label for label, g in (("A", group_a), ("B", group_b)) if g is None]

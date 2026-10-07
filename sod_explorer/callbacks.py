@@ -548,7 +548,8 @@ def _register_legacy(app):
             merged, report = merge_by_depth(
                 dfa, dfb, depth_a, depth_b,
                 tolerance_m=float(tolerance_cm if tolerance_cm is not None else 2) / 100.0,
-                allow_mixed_scales="mixed_scales" in options, one_to_one="one_to_one" in options)
+                allow_mixed_scales="mixed_scales" in options, one_to_one="one_to_one" in options,
+                across_holes="across_holes" in options)
         except MergeError as exc:
             return None, None, html.Span(f"Merge not performed: {exc}", style={"color": "var(--danger)"})
         report_dict = report.to_dict()

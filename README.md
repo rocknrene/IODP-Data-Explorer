@@ -75,7 +75,8 @@ letters were assigned.
 |---------------------------------|---------------------------------------------|--------------------------------------------|
 | DSDP (Glomar Challenger)        | DSDP Data Access application (shinylaurel.com) | Headless browser (Selenium)            |
 | IODP (JOIDES Resolution), Exp. 317 onward | LORE (LIMS database)              | LORE JSON services                         |
-| ODP; IODP Exp. 301 to 312 (JOIDES Resolution) | NOAA NCEI archive              | File upload (reader not yet implemented)   |
+| ODP (JOIDES Resolution), Legs 101 to 210 | NOAA NCEI archive (doi:10.7289/V5W37T8C); LORE as fallback | One tab-delimited file per Hole and data type |
+| IODP Exp. 301 to 312 (JOIDES Resolution) | NOAA NCEI archive              | ODP file layout is tried (not yet verified); otherwise file upload |
 | IODP (Chikyu)                   | PANGAEA; otherwise J-CORES                  | PANGAEA search API; J-CORES by upload      |
 | IODP (Mission-Specific Platform)| PANGAEA                                     | PANGAEA search API                         |
 
@@ -272,7 +273,7 @@ sod_explorer/
   parsing.py       File readers
   analysis.py      Merge, correlation, smoothing, gaps, core tops
   provenance.py    Provenance records and export archives
-  sources/         LORE, PANGAEA, DSDP clients and routing rules
+  sources/         LORE, NCEI, PANGAEA, DSDP clients and routing rules
   plotting.py      Figure builders
   layout.py        Page layout
   callbacks.py     Dash callbacks
@@ -283,16 +284,20 @@ tests/             Test suite and fixtures
 
 ## Known limitations
 
-- ODP Legs and IODP Expeditions 301 to 312 are not served by LORE; a reader
-  for the NOAA NCEI JOIDES Resolution archive is planned. Until then these
-  data must be uploaded as files.
+- ODP data are read from the NOAA NCEI archive one Hole at a time. The file
+  layout was verified on Leg 204, Hole 1244C; other Legs are assumed to
+  follow it. The layout of IODP Expeditions 301 to 312 in the archive has
+  not been verified, so these may still require file upload.
 - Sites and holes for Expeditions 380, 389, and 405 are not yet in the
   reference table; these expeditions can be selected, but only with Site and
   Hole left blank.
-- The LORE names of eleven LIMS reports (all except GRA, MAD, PWL, NGR, TCON,
-  and AVS) have not been verified against LORE. The client tries the LIMS
-  analysis code first and then alternatives; run
-  `python -m sod_explorer.sources.check_lore` to see which resolve.
+- LORE assembles three reports in the browser from an internal report:
+  carbonates, interstitial water, and gas elements. This software assembles
+  them in the same way, following LORE's report definitions, but does not
+  round values and keeps replicate measurements on separate rows, so a
+  table can differ in layout from the one LORE displays.
+- PANGAEA datasets under moratorium require a login and cannot be retrieved;
+  the application reports this and asks for another dataset or a file upload.
 - DSDP retrieval automates the DSDP Data Access web application (used with
   its maintainer's permission) and will fail if its page layout changes.
 - The merge pairs nearest samples; it does not interpolate.

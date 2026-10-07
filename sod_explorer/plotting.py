@@ -351,11 +351,14 @@ def correlation_figure(df, depth, column_x, column_y, theme="dark", detrend=Fals
         x_range = np.linspace(sub[column_x].min(), sub[column_x].max(), 200)
         fig.add_trace(go.Scatter(x=x_range, y=result.slope * x_range + result.intercept, mode="lines",
                                  name="OLS fit", line=dict(color=t["danger"], width=1.5, dash="dash")))
-        fig.update_layout(title=dict(text=result.summary()
-                                     + "<br><sup>p and CI use n_eff adjusted for lag-1 autocorrelation "
+        # The statistics are set on two lines so that they fit the width of a phone screen.
+        summary = result.summary().replace(", p = ", "<br>p = ").replace(" (significance", "<br>(significance")
+        fig.update_layout(title=dict(text=summary
+                                     + "<br><sup>p and CI use n_eff adjusted for lag-1 autocorrelation<br>"
                                        "(Bretherton et al., 1999)</sup>", font=dict(size=11)))
     fig.update_layout(**base_layout(theme), height=600, xaxis_title=x_label, yaxis_title=y_label,
                       showlegend=True, legend=dict(orientation="h", y=-0.15))
+    fig.update_layout(margin=dict(t=96), title=dict(y=0.98, yanchor="top"))
     return _style_axes(fig, theme)
 
 

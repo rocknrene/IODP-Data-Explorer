@@ -90,6 +90,8 @@ INDEX_STRING = """<!DOCTYPE html>
   .dash-spreadsheet-container::-webkit-scrollbar-track { background:var(--bg); }
   .dash-spreadsheet-container::-webkit-scrollbar-thumb { background:var(--muted); border-radius:6px;
                                                          border:2px solid var(--bg); }
+  /* On a phone the chart toolbar would cover the chart title, and pinch and drag replace it. */
+  @media (max-width: 700px) { .js-plotly-plot .modebar-container { display:none !important; } }
   .info-summary { list-style:none; }
   .info-summary::-webkit-details-marker { display:none; }
   .info-icon { font-size:13px; letter-spacing:0; color:var(--accent); padding-left:8px; }
@@ -99,6 +101,17 @@ INDEX_STRING = """<!DOCTYPE html>
 <body>
 {%app_entry%}
 <footer>{%config%}{%scripts%}{%renderer%}</footer>
+<script>
+  // When a menu opens, place the cursor in its search box, so that typing filters the list
+  // even if a value is already selected (the menu otherwise puts the cursor on that value).
+  document.addEventListener("click", function (event) {
+    if (!event.target.closest || !event.target.closest(".dash-dropdown")) { return; }
+    setTimeout(function () {
+      var box = document.querySelector(".dash-dropdown-content input.dash-dropdown-search");
+      if (box && document.activeElement !== box) { box.focus(); box.select(); }
+    }, 60);
+  });
+</script>
 </body>
 </html>"""
 
@@ -284,8 +297,9 @@ _SOURCE_NOTE = (
     "Select a Leg or Expedition; the archive is chosen automatically. DSDP Legs are retrieved "
     "from the DSDP Data Access application (or PANGAEA for a few data types); JOIDES Resolution "
     "expeditions from LORE (LIMS data, Expedition 317 onward); Chikyu and Mission-Specific "
-    "Platform expeditions from PANGAEA. ODP Legs and IODP Expeditions 301 to 312 predate LIMS "
-    "and currently require file upload. Report types use one generic name across programs; a "
+    "Platform expeditions from PANGAEA. ODP Legs are retrieved from the NOAA NCEI archive, one "
+    "Hole at a time; IODP Expeditions 301 to 312 may require file upload. Report types use one "
+    "generic name across programs; a "
     "type with no DSDP equivalent returns no DSDP data."
 )
 
@@ -371,7 +385,9 @@ def legacy_sidebar() -> html.Div:
             dcc.Checklist(id="pe-merge-opts", value=["one_to_one"],
                           labelStyle={**CHECK_LABEL, "marginTop": "8px"}, inputStyle=CHECK_INPUT,
                           options=[{"label": " Use each B sample at most once", "value": "one_to_one"},
-                                   {"label": " Allow different depth scales", "value": "mixed_scales"}]),
+                                   {"label": " Allow different depth scales", "value": "mixed_scales"},
+                                   {"label": " Pair across different Sites/Holes (depth only)",
+                                    "value": "across_holes"}]),
             html.Button("Merge datasets", id="pe-merge-btn", n_clicks=0,
                         style={**button("var(--accent2)"), "fontSize": "12px"}),
         ]),

@@ -10,8 +10,14 @@ application is deployed to. This module makes one small real request to
 each source and prints whether it succeeded:
 
 * LORE: moisture and density for Expedition 362, Hole U1480E.
+* LORE composite and renamed reports: carbonates, interstitial water, and
+  gas elements for Hole U1480E;
+  penetrometer and source rock analysis for Site U1480 (absence of data
+  for the Site is reported, not counted as a failure).
+* NOAA NCEI archive: carbonates for ODP Leg 204, Hole 1244C.
 * PANGAEA: a dataset search for Expedition 343 (Chikyu), and a download of
-  the first dataset found.
+  the first dataset found that is not access-restricted (datasets under
+  moratorium require a PANGAEA login and are skipped).
 * DSDP Data Access application: density and porosity for Leg 29, Site 277
   (requires Chromium and chromedriver; see
   :mod:`sod_explorer.sources.shinylaurel`).
@@ -24,7 +30,8 @@ from __future__ import annotations
 import time
 import traceback
 
-from . import lore, pangaea, shinylaurel
+from . import lore, ncei, pangaea, shinylaurel
+from .common import SourceError
 
 
 def _lore() -> str:
@@ -33,12 +40,22 @@ def _lore() -> str:
 
 
 def _pangaea() -> str:
-    results = pangaea.search('"Expedition 343" Chikyu', count=5)
+    results = pangaea.search('"Expedition 343" Chikyu', count=8)
     if not results:
         return "search returned no datasets (service reachable)"
-    df, source = pangaea.fetch_dataset(results[0]["value"])
-    return (f"{len(results)} datasets found; downloaded {results[0]['value']} "
-            f"({len(df)} rows); citation present: {bool(source.get('citation'))}")
+    restricted = []
+    for result in results:
+        try:
+            df, source = pangaea.fetch_dataset(result["value"])
+        except SourceError as exc:
+            if "access-restricted" not in str(exc):
+                raise
+            restricted.append(result["value"])
+            continue
+        return (f"{len(results)} datasets found; downloaded {result['value']} ({len(df)} rows); "
+                f"citation present: {bool(source.get('citation'))}; "
+                f"access-restricted and skipped: {restricted or 'none'}")
+    return f"{len(results)} datasets found, all access-restricted: {restricted}"
 
 
 def _dsdp() -> str:
@@ -46,7 +63,40 @@ def _dsdp() -> str:
     return f"{len(df)} rows of {source['rows_downloaded']} downloaded; columns {list(df.columns)[:6]}"
 
 
-CHECKS = (("LORE", _lore), ("PANGAEA", _pangaea), ("DSDP Data Access", _dsdp))
+def _lore_carbonates() -> str:
+    df, source = lore.fetch("carbonates", "362", "U1480", "E")
+    return (f"{len(df)} rows; columns {list(df.columns)}; first row {df.iloc[0].tolist()}; "
+            f"reports {source['query']['lims_reports']}")
+
+
+def _lore_composites() -> str:
+    parts = []
+    for key in ("interstitial_water", "gas_elements"):
+        df, _ = lore.fetch(key, "362", "U1480", "E")
+        parts.append(f"{key}: {len(df)} rows; columns {list(df.columns)}; first row {df.iloc[0].tolist()}")
+    return " | ".join(parts)
+
+
+def _lore_strength() -> str:
+    parts = []
+    for key in ("penetrometer", "source_rock"):
+        try:
+            df, _ = lore.fetch(key, "362", "U1480", "")
+            parts.append(f"{key}: {len(df)} rows, {len(df.columns)} columns")
+        except SourceError as exc:
+            parts.append(f"{key}: {exc}")
+    return "; ".join(parts)
+
+
+def _ncei() -> str:
+    df, source = ncei.fetch("carbonates", "204", "1244", "C")
+    return f"{len(df)} rows, {len(df.columns)} columns; file {source['query']['files'][0]['url']}"
+
+
+CHECKS = (("LORE", _lore), ("LORE carbonates", _lore_carbonates),
+          ("LORE interstitial water and gas elements", _lore_composites),
+          ("LORE penetrometer and source rock", _lore_strength), ("NCEI", _ncei),
+          ("PANGAEA", _pangaea), ("DSDP Data Access", _dsdp))
 
 
 def main() -> int:

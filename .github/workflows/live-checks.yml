@@ -40,14 +40,22 @@ jobs:
           set -o pipefail
           export CHROMEDRIVER_PATH="${CHROMEWEBDRIVER}/chromedriver"
           python -m sod_explorer.sources.check_live 2>&1 | tee live_requests.txt
+      - name: Discover unknown LORE report names
+        if: always()
+        run: python -m sod_explorer.sources.discover_lore 2>&1 | tee lore_discovery.txt
+      - name: Map the NCEI JOIDES Resolution archive
+        if: always()
+        run: python -m sod_explorer.sources.discover_ncei 2>&1 | tee ncei_layout.txt
       - name: Publish results
         if: always()
         run: |
           {
             echo "## LORE report names"; echo '```'; cat lore_names.txt 2>/dev/null; echo '```'
             echo "## Live requests"; echo '```'; cat live_requests.txt 2>/dev/null; echo '```'
+            echo "## LORE discovery"; echo '```'; head -c 60000 lore_discovery.txt 2>/dev/null; echo '```'
+            echo "## NCEI archive layout"; echo '```'; head -c 60000 ncei_layout.txt 2>/dev/null; echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          mkdir published && cp lore_names.txt live_requests.txt published/ 2>/dev/null || true
+          mkdir published && cp lore_names.txt live_requests.txt lore_discovery.txt ncei_layout.txt published/ 2>/dev/null || true
           echo "commit ${GITHUB_SHA} run ${GITHUB_RUN_ID} $(date -u +%FT%TZ)" > published/RUN.txt
           cd published
           git init -q -b results-live-checks
