@@ -9,7 +9,7 @@ authors:
   - family-names: Castillo
     given-names: René
     affiliation: "School of Earth Sciences, The Ohio State University"
-url: "https://huggingface.co/spaces/rocknrene/IODP-Data-Explorer"
+url: "https://huggingface.co/spaces/rocknrene/SOD-Explorer"
 repository-code: "https://github.com/rocknrene/IODP-Data-Explorer"
 doi: 10.5281/zenodo.20669063
 keywords:

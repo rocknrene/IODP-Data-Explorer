@@ -20,7 +20,7 @@ depth-registering, and visualizing scientific ocean drilling data from the
 Deep Sea Drilling Project (DSDP), the Ocean Drilling Program (ODP), and the
 International Ocean Discovery Program (IODP).
 
-Live application: <https://huggingface.co/spaces/rocknrene/IODP-Data-Explorer>
+Live application: <https://huggingface.co/spaces/rocknrene/SOD-Explorer>
 Source code: <https://github.com/rocknrene/IODP-Data-Explorer>
 
 The block at the top of this file configures the Hugging Face Space and must

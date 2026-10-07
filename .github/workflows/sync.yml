@@ -16,4 +16,4 @@ jobs:
         run: |
           git config user.email "action@github.com"
           git config user.name "GitHub Action"
-          git push https://rocknrene:$HF_TOKEN@huggingface.co/spaces/rocknrene/IODP-Data-Explorer main --force
+          git push https://rocknrene:$HF_TOKEN@huggingface.co/spaces/rocknrene/SOD-Explorer main --force

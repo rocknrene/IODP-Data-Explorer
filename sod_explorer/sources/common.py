@@ -12,7 +12,7 @@ from ..reference import UNLETTERED_HOLE
 #: User-Agent sent to every service. Identifies the software and a contact
 #: URL so that service operators can distinguish it from automated scraping.
 USER_AGENT = ("SOD-Explorer/2.0 (scientific ocean drilling data viewer; "
-              "https://huggingface.co/spaces/rocknrene/IODP-Data-Explorer)")
+              "https://huggingface.co/spaces/rocknrene/SOD-Explorer)")
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9]{1,8}$")
 

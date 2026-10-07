@@ -40,7 +40,7 @@ deploy = ["gunicorn>=22"]
 test = ["pytest>=8", "pytest-cov>=5", "ruff>=0.5"]
 
 [project.urls]
-Application = "https://huggingface.co/spaces/rocknrene/IODP-Data-Explorer"
+Application = "https://huggingface.co/spaces/rocknrene/SOD-Explorer"
 Repository = "https://github.com/rocknrene/IODP-Data-Explorer"
 
 [tool.setuptools.dynamic]

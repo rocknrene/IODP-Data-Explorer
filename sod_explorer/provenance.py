@@ -36,7 +36,7 @@ from .columns import depth_scale, find_depth_column
 
 SCHEMA = "sod-explorer-provenance/1"
 SOFTWARE_NAME = "SOD Explorer"
-SOFTWARE_URL = "https://huggingface.co/spaces/rocknrene/IODP-Data-Explorer"
+SOFTWARE_URL = "https://huggingface.co/spaces/rocknrene/SOD-Explorer"
 SOFTWARE_CITATION = (
     f"Castillo, R. ({datetime.now(timezone.utc).year}). SOD Explorer (version {__version__}) "
     f"[Computer software]. {SOFTWARE_URL}"
